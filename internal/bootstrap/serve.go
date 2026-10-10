@@ -1,0 +1,65 @@
+package bootstrap
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"time"
+
+	"github.com/hisho-123/stock_notification_backend/internal/adapter/fmp"
+	"github.com/hisho-123/stock_notification_backend/internal/adapter/httpapi"
+	"github.com/hisho-123/stock_notification_backend/internal/adapter/postgres"
+	"github.com/hisho-123/stock_notification_backend/internal/adapter/security"
+	"github.com/hisho-123/stock_notification_backend/internal/config"
+	"github.com/hisho-123/stock_notification_backend/internal/usecase"
+)
+
+type wallClock struct{}
+
+func (wallClock) Now() time.Time { return time.Now().UTC() }
+
+func Serve(ctx context.Context, c config.Config, logger *slog.Logger) error {
+	startup, cancel := context.WithTimeout(ctx, 15*time.Second)
+	store, err := postgres.OpenPool(startup, c.DatabaseURL)
+	if err != nil {
+		cancel()
+		return err
+	}
+	defer store.Close()
+	if err := store.DeleteExpiredSessions(startup, time.Now()); err != nil {
+		cancel()
+		return err
+	}
+	if _, err := store.GetSettings(startup); err != nil {
+		cancel()
+		return err
+	}
+	cancel()
+	clock := wallClock{}
+	api := &httpapi.Server{
+		Assets:   usecase.Assets{Repository: store, Prices: fmp.New(c.FMPAPIKey, nil), Clock: clock},
+		Settings: usecase.Settings{Repository: store, Clock: clock},
+		Auth:     usecase.Auth{Repository: store, Passwords: security.Passwords{}, Tokens: security.Tokens{}, Clock: clock, AdminID: c.AdminID, PasswordHash: c.AdminPasswordHash},
+		Clock:    clock, PublicOrigin: c.PublicOrigin, StaticDir: c.StaticDir, TrustedProxies: c.TrustedProxies,
+	}
+	server := &http.Server{Addr: c.HTTPAddr, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 90 * time.Second, WriteTimeout: 95 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
+	done := make(chan error, 1)
+	go func() { done <- server.ListenAndServe() }()
+	logger.Info("web_started", "result", "listening")
+	select {
+	case err := <-done:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return usecase.ErrUnavailable
+	case <-ctx.Done():
+		shutdown, cancel := context.WithTimeout(context.Background(), 95*time.Second)
+		defer cancel()
+		if err := server.Shutdown(shutdown); err != nil {
+			_ = server.Close()
+			return usecase.ErrUnavailable
+		}
+		return nil
+	}
+}

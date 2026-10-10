@@ -1,0 +1,61 @@
+package line
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"time"
+)
+
+var ErrNotification = errors.New("line notification failed")
+
+type Client struct {
+	Token, UserID, Endpoint string
+	HTTP                    *http.Client
+}
+
+func New(token, userID string, client *http.Client) *Client {
+	h := http.Client{}
+	if client != nil {
+		h = *client
+	}
+	if h.Timeout <= 0 || h.Timeout > 30*time.Second {
+		h.Timeout = 30 * time.Second
+	}
+	h.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &Client{Token: token, UserID: userID, Endpoint: "https://api.line.me/v2/bot/message/push", HTTP: &h}
+}
+func (c *Client) Send(ctx context.Context, text string) error {
+	body, err := json.Marshal(struct {
+		To       string              `json:"to"`
+		Messages []map[string]string `json:"messages"`
+	}{To: c.UserID, Messages: []map[string]string{{"type": "text", "text": text}}})
+	if err != nil {
+		return ErrNotification
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint, bytes.NewReader(body))
+	if err != nil {
+		return ErrNotification
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Content-Type", "application/json")
+	res, err := c.HTTP.Do(req)
+	if err != nil {
+		return ErrNotification
+	}
+	defer res.Body.Close()
+	// Receipt, rather than delivery, is successful only for HTTP 200.
+	if res.StatusCode != http.StatusOK {
+		return ErrNotification
+	}
+	_, err = io.Copy(io.Discard, io.LimitReader(res.Body, 8192))
+	if err != nil {
+		return ErrNotification
+	}
+	return nil
+}
