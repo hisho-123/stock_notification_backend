@@ -1,4 +1,4 @@
-.PHONY: build test test-integration vet fmt db-up db-down migrate
+.PHONY: build test test-integration coverage vet fmt db-up db-down migrate
 
 COMPOSE ?= $(shell if docker compose version >/dev/null 2>&1; then echo 'docker compose'; else echo 'docker-compose'; fi)
 
@@ -12,11 +12,15 @@ test-integration:
 	@test -n "$${TEST_DATABASE_URL}" || (echo 'TEST_DATABASE_URL is required' >&2; exit 1)
 	go test -race -tags=integration ./tests/integration/...
 
+coverage:
+	python3 -m unittest discover -s scripts -p 'test_coverage.py'
+	python3 scripts/coverage.py
+
 vet:
 	go vet ./...
 
 fmt:
-	gofmt -w cmd internal tests
+	gofmt -w cmd internal tests scripts
 
 db-up:
 	$(COMPOSE) -f deploy/compose.yaml up -d db

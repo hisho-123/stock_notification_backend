@@ -29,13 +29,11 @@ func New(token, userID string, client *http.Client) *Client {
 	return &Client{Token: token, UserID: userID, Endpoint: "https://api.line.me/v2/bot/message/push", HTTP: &h}
 }
 func (c *Client) Send(ctx context.Context, text string) error {
-	body, err := json.Marshal(struct {
+	// This payload contains only strings, so JSON encoding cannot fail.
+	body, _ := json.Marshal(struct {
 		To       string              `json:"to"`
 		Messages []map[string]string `json:"messages"`
 	}{To: c.UserID, Messages: []map[string]string{{"type": "text", "text": text}}})
-	if err != nil {
-		return ErrNotification
-	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint, bytes.NewReader(body))

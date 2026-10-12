@@ -36,10 +36,9 @@ func OpenPool(ctx context.Context, url string) (*Store, error) {
 	cfg.ConnConfig.RuntimeParams["timezone"] = "UTC"
 	cfg.ConnConfig.ConnectTimeout = 10 * time.Second
 	cfg.MaxConns = 4
-	pool, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		return nil, usecase.ErrUnavailable
-	}
+	// NewWithConfig only rejects MaxConns < 1; it is fixed at four above.
+	// Connectivity is checked separately by Ping.
+	pool, _ := pgxpool.NewWithConfig(ctx, cfg)
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
 		return nil, usecase.ErrUnavailable

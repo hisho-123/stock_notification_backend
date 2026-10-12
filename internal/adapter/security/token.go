@@ -12,9 +12,8 @@ type Tokens struct{}
 
 func (Tokens) Generate() (string, error) {
 	var bytes [32]byte
-	if _, err := rand.Read(bytes[:]); err != nil {
-		return "", err
-	}
+	// Since Go 1.24, rand.Read fills the buffer or terminates the process.
+	_, _ = rand.Read(bytes[:])
 	return base64.RawURLEncoding.EncodeToString(bytes[:]), nil
 }
 func (Tokens) Hash(token string) string {

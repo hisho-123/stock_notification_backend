@@ -9,7 +9,6 @@ import (
 
 	"github.com/hisho-123/stock_notification_backend/internal/adapter/fmp"
 	"github.com/hisho-123/stock_notification_backend/internal/adapter/httpapi"
-	"github.com/hisho-123/stock_notification_backend/internal/adapter/postgres"
 	"github.com/hisho-123/stock_notification_backend/internal/adapter/security"
 	"github.com/hisho-123/stock_notification_backend/internal/config"
 	"github.com/hisho-123/stock_notification_backend/internal/usecase"
@@ -20,8 +19,12 @@ type wallClock struct{}
 func (wallClock) Now() time.Time { return time.Now().UTC() }
 
 func Serve(ctx context.Context, c config.Config, logger *slog.Logger) error {
+	return serveWith(ctx, c, logger, openPool, newHTTPServer)
+}
+
+func serveWith(ctx context.Context, c config.Config, logger *slog.Logger, open openStore, newServer func(*http.Server) httpServer) error {
 	startup, cancel := context.WithTimeout(ctx, 15*time.Second)
-	store, err := postgres.OpenPool(startup, c.DatabaseURL)
+	store, err := open(startup, c.DatabaseURL)
 	if err != nil {
 		cancel()
 		return err
@@ -43,7 +46,7 @@ func Serve(ctx context.Context, c config.Config, logger *slog.Logger) error {
 		Auth:     usecase.Auth{Repository: store, Passwords: security.Passwords{}, Tokens: security.Tokens{}, Clock: clock, AdminID: c.AdminID, PasswordHash: c.AdminPasswordHash},
 		Clock:    clock, PublicOrigin: c.PublicOrigin, StaticDir: c.StaticDir, TrustedProxies: c.TrustedProxies,
 	}
-	server := &http.Server{Addr: c.HTTPAddr, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 90 * time.Second, WriteTimeout: 95 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10}
+	server := newServer(&http.Server{Addr: c.HTTPAddr, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 90 * time.Second, WriteTimeout: 95 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 32 << 10})
 	done := make(chan error, 1)
 	go func() { done <- server.ListenAndServe() }()
 	logger.Info("web_started", "result", "listening")

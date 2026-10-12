@@ -11,7 +11,11 @@ import (
 )
 
 func monitor(ctx context.Context, c config.Config, logger *slog.Logger) int {
-	result, err := bootstrap.Monitor(ctx, c, logger)
+	return monitorWith(ctx, c, logger, bootstrap.Monitor)
+}
+
+func monitorWith(ctx context.Context, c config.Config, logger *slog.Logger, start func(context.Context, config.Config, *slog.Logger) (usecase.MonitorResult, error)) int {
+	result, err := start(ctx, c, logger)
 	logger.Info("monitor_finished", "processed", result.Processed, "skipped", result.Skipped, "failed", result.Failed, "stale", result.Stale)
 	if err != nil {
 		code := "MONITOR_FAILED"

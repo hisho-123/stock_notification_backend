@@ -26,9 +26,13 @@ func (testPasswords) Matches(_, password string) bool { return password == "corr
 type testSessions struct {
 	usecase.SessionRepository
 	rows map[string]domain.Session
+	err  error
 }
 
 func (s *testSessions) FindSession(_ context.Context, hash string) (domain.Session, error) {
+	if s.err != nil {
+		return domain.Session{}, s.err
+	}
 	row, ok := s.rows[hash]
 	if !ok {
 		return row, usecase.ErrNotFound
@@ -36,11 +40,17 @@ func (s *testSessions) FindSession(_ context.Context, hash string) (domain.Sessi
 	return row, nil
 }
 func (s *testSessions) ReplaceSession(_ context.Context, old string, row domain.Session) error {
+	if s.err != nil {
+		return s.err
+	}
 	delete(s.rows, old)
 	s.rows[row.TokenHash] = row
 	return nil
 }
 func (s *testSessions) DeleteSession(_ context.Context, hash string) error {
+	if s.err != nil {
+		return s.err
+	}
 	delete(s.rows, hash)
 	return nil
 }
@@ -48,22 +58,62 @@ func (s *testSessions) DeleteSession(_ context.Context, hash string) error {
 type testSettings struct {
 	values  []int
 	updates int
+	err     error
 }
 
 func (s *testSettings) GetSettings(context.Context) (domain.NotificationSettings, error) {
-	return domain.NotificationSettings{Thresholds: s.values}, nil
+	return domain.NotificationSettings{Thresholds: s.values}, s.err
 }
 func (s *testSettings) SaveSettings(_ context.Context, settings domain.NotificationSettings) (domain.NotificationSettings, error) {
 	s.updates++
+	if s.err != nil {
+		return domain.NotificationSettings{}, s.err
+	}
 	s.values = settings.Thresholds
 	return settings, nil
 }
 
-type testAssets struct{ usecase.AssetRepository }
-
-func (testAssets) List(context.Context, usecase.ListOptions) ([]domain.Asset, error) {
-	return []domain.Asset{}, nil
+type testAssets struct {
+	usecase.AssetRepository
+	row   domain.Asset
+	err   error
+	calls []string
 }
+
+func (a *testAssets) List(context.Context, usecase.ListOptions) ([]domain.Asset, error) {
+	a.calls = append(a.calls, "list")
+	if a.row.ID != 0 {
+		return []domain.Asset{a.row}, a.err
+	}
+	return []domain.Asset{}, a.err
+}
+func (a *testAssets) ExistsCode(context.Context, string) (bool, error) {
+	a.calls = append(a.calls, "exists")
+	return false, a.err
+}
+func (a *testAssets) Create(_ context.Context, row domain.Asset) (domain.Asset, error) {
+	a.calls = append(a.calls, "create")
+	row.ID = 1
+	a.row = row
+	return row, a.err
+}
+func (a *testAssets) SetMonitoring(_ context.Context, id int64, enabled bool, now time.Time) (domain.Asset, error) {
+	a.calls = append(a.calls, "update")
+	a.row.MonitoringEnabled = enabled
+	a.row.UpdatedAt = now
+	return a.row, a.err
+}
+func (a *testAssets) Delete(context.Context, int64) error {
+	a.calls = append(a.calls, "delete")
+	return a.err
+}
+
+type testPrices struct {
+	quote domain.Quote
+	err   error
+}
+
+func (p *testPrices) Fetch(context.Context, string) (domain.Quote, error) { return p.quote, p.err }
 
 type fixture struct {
 	handler  http.Handler
@@ -71,14 +121,19 @@ type fixture struct {
 	sessions *testSessions
 	settings *testSettings
 	clock    *testClock
+	assets   *testAssets
+	prices   *testPrices
 }
 
 func newFixture() fixture {
 	clock := &testClock{time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)}
 	sessions := &testSessions{rows: map[string]domain.Session{}}
 	settings := &testSettings{values: []int{10, 20}}
-	api := &Server{PublicOrigin: "https://stock.example.com", Clock: clock, Assets: usecase.Assets{Repository: testAssets{}, Clock: clock}, Settings: usecase.Settings{Repository: settings, Clock: clock}, Auth: usecase.Auth{Repository: sessions, Tokens: security.Tokens{}, Passwords: testPasswords{}, Clock: clock, AdminID: "owner"}}
-	return fixture{handler: api.Handler(), server: api, sessions: sessions, settings: settings, clock: clock}
+	assets := &testAssets{}
+	price, _ := domain.ParsePrice("100")
+	prices := &testPrices{quote: domain.Quote{Price: price, Name: "Apple", ProvidedAt: clock.now, FetchedAt: clock.now}}
+	api := &Server{PublicOrigin: "https://stock.example.com", Clock: clock, Assets: usecase.Assets{Repository: assets, Prices: prices, Clock: clock}, Settings: usecase.Settings{Repository: settings, Clock: clock}, Auth: usecase.Auth{Repository: sessions, Tokens: security.Tokens{}, Passwords: testPasswords{}, Clock: clock, AdminID: "owner"}}
+	return fixture{handler: api.Handler(), server: api, sessions: sessions, settings: settings, clock: clock, assets: assets, prices: prices}
 }
 func (f fixture) request(method, path, body string, cookies []*http.Cookie, csrf string, modify func(*http.Request)) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, "https://stock.example.com"+path, strings.NewReader(body))
@@ -132,10 +187,19 @@ func TestSessionLifecycleAndCookies(t *testing.T) {
 	if w.Code != 204 || len(f.sessions.rows) != 0 {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	for _, cookie := range w.Result().Cookies() {
-		if cookie.MaxAge >= 0 {
+	deleted := w.Result().Cookies()
+	if len(deleted) != 2 {
+		t.Fatal("missing deletion cookies", deleted)
+	}
+	names := map[string]bool{}
+	for _, cookie := range deleted {
+		names[cookie.Name] = true
+		if cookie.MaxAge >= 0 || cookie.Value != "" || cookie.Path != "/" || !cookie.Secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode {
 			t.Fatal("cookie not deleted")
 		}
+	}
+	if !names[sessionCookie] || !names[csrfCookie] {
+		t.Fatal("wrong deletion cookies", names)
 	}
 	if w := f.request("GET", "/api/v1/assets", "", cookies, "", nil); w.Code != 401 {
 		t.Fatal("old session valid")

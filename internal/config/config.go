@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -10,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/hisho-123/stock_notification_backend/internal/adapter/security"
+	"github.com/joho/godotenv"
 )
 
 type Config struct {
@@ -18,7 +20,21 @@ type Config struct {
 	TrustedProxies                                                []netip.Prefix
 }
 
-func Load(command string) (Config, error) { return FromEnv(command, os.Getenv) }
+func Load(command string) (Config, error) {
+	values, err := godotenv.Read(".env")
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		// 解析エラーには設定値が含まれ得るため、ログへ渡すエラーは固定する。
+		return Config{}, errors.New(".env could not be read or parsed")
+	}
+	return FromEnv(command, func(key string) string {
+		// 空文字も明示的な指定なので、キーの有無で.envの優先を判断する。
+		if value, ok := values[key]; ok {
+			return value
+		}
+		return os.Getenv(key)
+	})
+}
+
 func FromEnv(command string, get func(string) string) (Config, error) {
 	c := Config{DatabaseURL: get("DATABASE_URL"), FMPAPIKey: get("FMP_API_KEY"), LINEToken: get("LINE_TOKEN"), LINEUserID: get("LINE_USER_ID"), AdminID: get("ADMIN_ID"), AdminPasswordHash: get("ADMIN_PASSWORD_HASH"), PublicOrigin: get("PUBLIC_ORIGIN"), HTTPAddr: get("HTTP_ADDR"), StaticDir: get("STATIC_DIR")}
 	if command != "serve" && command != "monitor" {

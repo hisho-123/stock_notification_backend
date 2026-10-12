@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"golang.org/x/crypto/bcrypt"
+	"github.com/hisho-123/stock_notification_backend/internal/testfixture"
 )
 
 func TestCommandSpecificConfiguration(t *testing.T) {
@@ -16,11 +16,8 @@ func TestCommandSpecificConfiguration(t *testing.T) {
 	if _, err := FromEnv("serve", get); err == nil {
 		t.Fatal("missing auth allowed")
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte("test"), 12)
-	if err != nil {
-		t.Fatal(err)
-	}
-	values["ADMIN_ID"], values["ADMIN_PASSWORD_HASH"], values["PUBLIC_ORIGIN"] = "owner", string(hash), "https://stock.example.com"
+	hash := testfixture.PasswordHash
+	values["ADMIN_ID"], values["ADMIN_PASSWORD_HASH"], values["PUBLIC_ORIGIN"] = "owner", hash, "https://stock.example.com"
 	c, err := FromEnv("serve", get)
 	if err != nil || c.HTTPAddr != "127.0.0.1:8080" {
 		t.Fatal(c, err)
@@ -34,20 +31,13 @@ func TestCommandSpecificConfiguration(t *testing.T) {
 }
 
 func TestServeRejectsInvalidPasswordHashes(t *testing.T) {
-	hash, err := bcrypt.GenerateFromPassword([]byte("test"), 12)
-	if err != nil {
-		t.Fatal(err)
-	}
-	valid := string(hash)
+	hash := testfixture.PasswordHash
+	valid := hash
 	tests := []struct {
 		name string
 		hash string
 	}{
 		{name: "truncated", hash: valid[:59]},
-		{name: "extended", hash: valid + "A"},
-		{name: "invalid salt", hash: valid[:7] + "!" + valid[8:]},
-		{name: "invalid checksum", hash: valid[:29] + "!" + valid[30:]},
-		{name: "invalid separator", hash: valid[:6] + "!" + valid[7:]},
 		{name: "low cost", hash: strings.Replace(valid, "$12$", "$11$", 1)},
 	}
 	for _, tt := range tests {

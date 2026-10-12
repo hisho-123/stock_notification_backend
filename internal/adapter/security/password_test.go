@@ -4,15 +4,12 @@ import (
 	"strings"
 	"testing"
 
-	"golang.org/x/crypto/bcrypt"
+	"github.com/hisho-123/stock_notification_backend/internal/testfixture"
 )
 
 func TestValidPasswordHash(t *testing.T) {
-	hash, err := bcrypt.GenerateFromPassword([]byte("test-password"), 12)
-	if err != nil {
-		t.Fatal(err)
-	}
-	valid := string(hash)
+	hash := testfixture.PasswordHash
+	valid := hash
 	tests := []struct {
 		name string
 		hash string
@@ -52,6 +49,23 @@ func TestValidPasswordHash(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := ValidPasswordHash(tt.hash); got != tt.want {
 				t.Fatalf("ValidPasswordHash() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPasswordMatching(t *testing.T) {
+	for _, tc := range []struct {
+		name, hash, password string
+		want                 bool
+	}{
+		{"correct", testfixture.PasswordHash, testfixture.Password, true},
+		{"incorrect", testfixture.PasswordHash, "wrong", false},
+		{"invalid hash", "invalid", testfixture.Password, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := (Passwords{}).Matches(tc.hash, tc.password); got != tc.want {
+				t.Fatal(got, tc.want)
 			}
 		})
 	}

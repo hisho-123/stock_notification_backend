@@ -9,7 +9,11 @@ import (
 )
 
 func serve(ctx context.Context, c config.Config, logger *slog.Logger) int {
-	if err := bootstrap.Serve(ctx, c, logger); err != nil {
+	return serveWith(ctx, c, logger, bootstrap.Serve)
+}
+
+func serveWith(ctx context.Context, c config.Config, logger *slog.Logger, start func(context.Context, config.Config, *slog.Logger) error) int {
+	if err := start(ctx, c, logger); err != nil {
 		logger.Error("web_failed", "error_code", "WEB_FAILED")
 		return 1
 	}
