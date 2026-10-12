@@ -52,6 +52,7 @@ Go標準ではC1を計測できないため、`scripts/branch-instrument.go`が�
 | 起動時の接続・セッション掃除・設定失敗、サーバーの起動と終了、資源解放 | `TestServeStartupFailuresReleaseResources`、`TestServeLifecycleAndConfiguration`、`TestPublicBootstrapConnectionFailures` |
 | bootstrapの依存接続、通知閾値の保存、観測ログ | `TestMonitorWiringAndObservationLog` |
 | コマンド別必須環境変数、設定境界、bcrypt検証の適用範囲 | `TestRequiredEnvironmentVariables`、`TestConfigurationBoundariesAndOverrides`、`TestCommandSpecificConfiguration`、`TestServeRejectsInvalidPasswordHashes` |
+| `.env`の自動読み込み・優先順位・空値、環境変数への補完と非変更、読み込み失敗時の秘密情報保護 | `TestLoadDotEnvOverridesWithoutChangingEnvironment`、`TestLoadDotEnvFallbacksAndEmptyValues`、`TestLoadRejectsInvalidDotEnvWithoutLeakingSecrets`、`TestCLIProcess`、`TestBootstrapAndCLIProcesses` |
 | トークン生成・ハッシュ比較、bcryptの形式と照合 | `TestRandomTokensAndHashComparison`、`TestValidPasswordHash`、`TestPasswordMatching` |
 | 認証の入力・トークン生成・保存失敗、セッション置換・期限・CSRF・ログアウト | `TestLoginValidationAndFailures`、`TestLoginPersistsHashesAndReplacesSession`、`TestAuthenticationAndLogout` |
 | Cookieの名前・2件の削除、Origin・CSRF・ログイン制限・信頼プロキシ | `TestSessionLifecycleAndCookies`、`TestCSRFAndStrictInputs`、`TestLoginFailureWindow`、`TestTrustedProxyChain`、`TestProxyFallbacksAndPartialFailureWindow` |

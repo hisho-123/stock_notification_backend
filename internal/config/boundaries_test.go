@@ -37,6 +37,7 @@ func TestRequiredEnvironmentVariables(t *testing.T) {
 }
 
 func TestConfigurationBoundariesAndOverrides(t *testing.T) {
+	t.Chdir(t.TempDir())
 	for _, tc := range []struct{ name, key, value string }{
 		{"invalid ID UTF8", "ADMIN_ID", "\xff"}, {"long ID", "ADMIN_ID", strings.Repeat("界", 101)},
 		{"bad address", "HTTP_ADDR", "localhost"}, {"bad proxies", "TRUSTED_PROXY_CIDRS", "10.0.0.0/8,bad"},

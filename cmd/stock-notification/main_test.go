@@ -16,6 +16,7 @@ import (
 )
 
 func TestCommandValidationAndDispatch(t *testing.T) {
+	t.Chdir(t.TempDir())
 	for _, tc := range []struct {
 		name    string
 		args    []string
@@ -122,16 +123,37 @@ func TestCLIProcess(t *testing.T) {
 	if err := os.MkdirAll(coverDir, 0700); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{"unknown"}, {"serve"}} {
-		cmd := exec.Command(binary, args...)
-		cmd.Env = append(os.Environ(), "DATABASE_URL=", "GOCOVERDIR="+coverDir)
-		output, err := cmd.CombinedOutput()
-		var exit *exec.ExitError
-		if !errors.As(err, &exit) || exit.ExitCode() != 1 {
-			t.Fatalf("args=%v err=%v output=%s", args, err, output)
-		}
-		if !strings.Contains(string(output), `"run_id":`) {
-			t.Fatal("CLI did not emit structured logs", string(output))
-		}
+	for _, tc := range []struct {
+		name, command, contents string
+	}{
+		{name: "unknown command", command: "unknown"},
+		{name: "missing configuration", command: "serve"},
+		{name: "invalid dotenv serve", command: "serve", contents: "FMP_API_KEY='secret-invalid-dotenv\n"},
+		{name: "invalid dotenv monitor", command: "monitor", contents: "SECRET!KEY=secret-invalid-dotenv\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workDir := t.TempDir()
+			if tc.contents != "" {
+				if err := os.WriteFile(filepath.Join(workDir, ".env"), []byte(tc.contents), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cmd := exec.Command(binary, tc.command)
+			cmd.Dir = workDir
+			cmd.Env = append(os.Environ(), "DATABASE_URL=", "GOCOVERDIR="+coverDir)
+			output, err := cmd.CombinedOutput()
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 1 {
+				t.Fatalf("command=%s err=%v output=%s", tc.command, err, output)
+			}
+			if !strings.Contains(string(output), `"run_id":`) {
+				t.Fatal("CLI did not emit structured logs", string(output))
+			}
+			if tc.contents != "" {
+				if !strings.Contains(string(output), `"msg":"configuration_invalid"`) || !strings.Contains(string(output), `"error_code":"CONFIG_INVALID"`) || !strings.Contains(string(output), ".env") || strings.Contains(string(output), "secret-invalid-dotenv") || strings.Contains(string(output), "SECRET!KEY") {
+					t.Fatal("CLI emitted an incorrect or unsafe configuration error", string(output))
+				}
+			}
+		})
 	}
 }

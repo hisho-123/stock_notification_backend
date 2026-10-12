@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -70,25 +71,36 @@ func TestBootstrapAndCLIProcesses(t *testing.T) {
 	}
 	defer occupied.Close()
 	for _, command := range []string{"monitor", "serve"} {
-		t.Run(command, func(t *testing.T) {
-			cmd := exec.Command(binary, command)
-			cmd.Env = append(os.Environ(), "GOCOVERDIR="+coverDir, "DATABASE_URL="+dsn, "FMP_API_KEY=dummy", "LINE_TOKEN=dummy", "LINE_USER_ID=dummy", "ADMIN_ID=owner", "ADMIN_PASSWORD_HASH="+testfixture.PasswordHash, "PUBLIC_ORIGIN=https://stock.example.com", "HTTP_ADDR="+occupied.Addr().String(), "TRUSTED_PROXY_CIDRS=")
-			output, err := cmd.CombinedOutput()
-			want := 0
-			if command == "serve" {
-				want = 1
-			}
-			got := 0
-			if err != nil {
-				var exit *exec.ExitError
-				if !errors.As(err, &exit) {
-					t.Fatal(err)
+		for _, source := range []string{"environment", "dotenv"} {
+			t.Run(command+"/"+source, func(t *testing.T) {
+				workDir := t.TempDir()
+				cmd := exec.Command(binary, command)
+				cmd.Dir = workDir
+				cmd.Env = append(os.Environ(), "GOCOVERDIR="+coverDir, "DATABASE_URL="+dsn, "FMP_API_KEY=dummy", "LINE_TOKEN=dummy", "LINE_USER_ID=dummy", "ADMIN_ID=owner", "ADMIN_PASSWORD_HASH="+testfixture.PasswordHash, "PUBLIC_ORIGIN=https://stock.example.com", "HTTP_ADDR="+occupied.Addr().String(), "TRUSTED_PROXY_CIDRS=")
+				if source == "dotenv" {
+					contents := fmt.Sprintf("DATABASE_URL='%s'\nFMP_API_KEY='dummy'\nLINE_TOKEN='dummy'\nLINE_USER_ID='dummy'\nADMIN_ID='owner'\nADMIN_PASSWORD_HASH='%s'\nPUBLIC_ORIGIN='https://stock.example.com'\nHTTP_ADDR='%s'\nTRUSTED_PROXY_CIDRS=''\n", dsn, testfixture.PasswordHash, occupied.Addr().String())
+					if err := os.WriteFile(filepath.Join(workDir, ".env"), []byte(contents), 0600); err != nil {
+						t.Fatal(err)
+					}
+					cmd.Env = append(cmd.Env, "DATABASE_URL=", "FMP_API_KEY=", "LINE_TOKEN=", "ADMIN_PASSWORD_HASH=")
 				}
-				got = exit.ExitCode()
-			}
-			if got != want || !strings.Contains(string(output), `"msg":"command_finished"`) {
-				t.Fatal(got, string(output))
-			}
-		})
+				output, err := cmd.CombinedOutput()
+				want := 0
+				if command == "serve" {
+					want = 1
+				}
+				got := 0
+				if err != nil {
+					var exit *exec.ExitError
+					if !errors.As(err, &exit) {
+						t.Fatal(err)
+					}
+					got = exit.ExitCode()
+				}
+				if got != want || !strings.Contains(string(output), `"msg":"command_finished"`) {
+					t.Fatal(got, string(output))
+				}
+			})
+		}
 	}
 }

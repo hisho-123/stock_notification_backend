@@ -13,7 +13,7 @@ Goによる単一管理者向けAPI・日次監視コマンド。PostgreSQLに�
 | `internal/usecase` | 操作の処理順序、外部接続のinterface、トランザクション範囲 |
 | `internal/adapter` | HTTP・PostgreSQL・FMP・LINE・認証用暗号処理 |
 | `internal/bootstrap` | 設定・接続・依存注入・起動と終了 |
-| `internal/config` | コマンド別の必須環境変数検証 |
+| `internal/config` | `.env`・環境変数の読み込みとコマンド別の設定検証 |
 | `migrations` | テーブル・制約・初期設定。起動時には適用しない |
 | `tests/integration` | 専用PostgreSQLと模擬FMP/LINEを使う結合テスト |
 
@@ -56,13 +56,7 @@ htpasswd -nBC 12 owner
 
 FMP・LINEの値はローカルの起動・認証確認では仮値のままでよい。銘柄登録など価格取得を伴う操作には有効な`FMP_API_KEY`が必要。`monitor`にはさらに有効な`LINE_TOKEN`・`LINE_USER_ID`が必要で、実際の通知が送信され得るため、この確認では実行しない。
 
-アプリは`.env`を自動読込しない。以降の実行前に、使用するシェルで読み込む。
-
-```sh
-set -a
-. ./.env
-set +a
-```
+`serve`・`monitor`は起動時の作業ディレクトリにある`.env`を自動で読み込む。リポジトリのルートで起動すれば、シェルでの手動読み込みは不要。同じ項目がある場合は環境変数より`.env`を優先し、明示された空値もそのまま使う。`.env`や項目がない場合は環境変数を使用する。必須項目が空の場合や、`.env`の読み込み・解析に失敗した場合は起動エラーになる。
 
 ### 3. DBを起動・初期化する
 
@@ -93,7 +87,7 @@ make build
 
 ### 5. curlでログイン・設定取得を確認する
 
-別ターミナルでも手順2の環境変数を読み込む。以下はzsh/bashで実行する。パスワードをコマンド履歴へ残さないよう対話入力し、レスポンスヘッダーは権限を制限した一時ディレクトリへ保存する。
+以下はzsh/bashで実行する。Originには手順2で設定した`https://localhost`を指定する。`PUBLIC_ORIGIN`を別の値にした場合は、curlのOriginも同じ値へ変更する。パスワードをコマンド履歴へ残さないよう対話入力し、レスポンスヘッダーは権限を制限した一時ディレクトリへ保存する。
 
 ```sh
 check_dir=$(mktemp -d)
@@ -106,7 +100,7 @@ printf '\n'
 escaped_password=$(printf '%s' "$admin_password" | sed 's/\\/\\\\/g; s/"/\\"/g')
 printf '{"admin_id":"owner","password":"%s"}' "$escaped_password" | \
   curl --fail-with-body -sS -D "$check_dir/headers" \
-    -H "Origin: $PUBLIC_ORIGIN" -H 'Content-Type: application/json' \
+    -H 'Origin: https://localhost' -H 'Content-Type: application/json' \
     --data-binary @- http://127.0.0.1:8080/api/v1/auth/login
 unset admin_password escaped_password
 
@@ -148,7 +142,8 @@ colima stop
 colima start
 docker context use colima
 make db-up
-# .envを読み込んでAPIを起動する。初期マイグレーションは再適用しない
+# APIを起動する（.envは自動読み込み）。初期マイグレーションは再適用しない
+./bin/stock-notification serve
 ```
 
 DBデータはDockerボリュームに保存する。通常の停止で`down -v`や`colima delete`は使用しない。
