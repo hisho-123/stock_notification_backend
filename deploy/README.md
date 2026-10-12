@@ -6,6 +6,14 @@ Webは単一プロセスで起動する。HTTPSリバースプロキシの背後
 
 以下は`docker compose`形式で記載する。単独のCompose CLIを利用する環境では`docker-compose`に読み替える。MakefileのDB操作は自動判別する。
 
+`api`・`monitor`は`.env`の`DATABASE_URL`をそのまま使用する。同梱DBへ接続する場合、ホスト上での実行には`127.0.0.1`、Compose内での実行にはサービス名`db`を指定する。Compose用の設定例は次のとおり。
+
+```sh
+DATABASE_URL='postgres://stock:stock@db:5432/stock?sslmode=disable'
+```
+
+`.env.example`の接続先はホスト実行用なので、Composeでアプリを起動する前に変更する。外部DBを使う場合は、そのDBの接続先・認証情報・TLS設定を`DATABASE_URL`へ指定する。ホスト実行へ切り替える際は、接続先も戻す。
+
 1. ルートの`.env.example`を`.env`へコピーし、秘密情報とcost 12以上のbcryptハッシュを設定する。`.env`は権限600にし、Gitへ追加しない。`htpasswd -nBC 12 owner`は対話入力でハッシュを生成できる。出力の`owner:`を除いたハッシュをシングルクォートで囲む。
 2. `make db-up`でローカルPostgreSQLを起動する。
 3. 初回のみ次のコマンドでスキーマを作成する。適用済みDBでは再実行しない。

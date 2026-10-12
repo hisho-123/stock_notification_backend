@@ -21,33 +21,137 @@ domainは外部サービスに依存せず、usecaseはdomainと標準ライブ�
 
 価格は`math/big`による正確な十進数として扱い、閾値は丸め前の値で判定する。APIは価格とIDを文字列、下落率を小数2桁、日時をUTCのRFC 3339で返す。DBは精度指定のないNUMERICを使用する。
 
-## 開発
+## macOSでの開発環境構築
 
-Go 1.25以降、PostgreSQL 17、Docker Composeまたは利用可能なPostgreSQLを用意する。
+HomebrewとGoが導入済みのmacOSを前提とする。Go 1.25以降、PostgreSQL 17を使用する。以下のコマンドはリポジトリのルートで実行する。Dockerの実行環境にはColimaを使い、APIはホスト上のGoで動かす。
+
+### 1. DockerとColimaを導入する
 
 ```sh
-make build
-make test
-make vet
+brew install colima docker docker-compose
+colima start
+# ColimaのDocker接続先を選択する
+docker context use colima
+docker info
+docker-compose version
+go version
 ```
 
-`.env`を設定後、シェルで読み込んで実行する。アプリ自体は`.env`を自動読込しない。
+HomebrewのComposeは単独の`docker-compose`コマンドで利用できる。この手順ではこちらを使用する。Makefileは`docker compose`が利用可能ならそちらを、そうでなければ`docker-compose`を自動選択する。ホストへのPostgreSQL・psqlのインストールは不要。
+
+### 2. ローカル設定を作成する
+
+既存の`.env`がある場合はコピーを省略し、必要な項目だけ編集する。
+
+```sh
+cp -n .env.example .env
+chmod 600 .env
+# 対話入力で管理者パスワードのbcryptハッシュを作成する
+htpasswd -nBC 12 owner
+```
+
+出力の`owner:`を除いたハッシュを、`.env`の`ADMIN_PASSWORD_HASH`へシングルクォートで囲んで設定する。ハッシュ中の`$`をシェルに展開させないこと。`ADMIN_ID='owner'`とし、`PUBLIC_ORIGIN='https://localhost'`へ変更する。DB接続先と`HTTP_ADDR='127.0.0.1:8080'`はサンプルのままでよい。
+
+このPCの初回構築では管理者パスワードを自動生成し、Git管理対象外の`bin/local-admin-password`（権限600）へ保存した。必要時にローカルで確認できる。再構築する場合は上記の対話入力で自分のパスワードを設定してよい。
+
+FMP・LINEの値はローカルの起動・認証確認では仮値のままでよい。銘柄登録など価格取得を伴う操作には有効な`FMP_API_KEY`が必要。`monitor`にはさらに有効な`LINE_TOKEN`・`LINE_USER_ID`が必要で、実際の通知が送信され得るため、この確認では実行しない。
+
+アプリは`.env`を自動読込しない。以降の実行前に、使用するシェルで読み込む。
 
 ```sh
 set -a
 . ./.env
 set +a
-./bin/stock-notification serve
-# 別途、日次処理を1回実行
-./bin/stock-notification monitor
 ```
 
-セッションCookieはSecure固定のため、ブラウザからはHTTPS経由で利用する。Reactの成果物は`web/dist/`へ配置する。
-
-結合テストは専用のDB URLを明示する。テストごとに一時スキーマを作成してマイグレーションを適用し、終了時にそのスキーマだけを削除する。DBロールにはスキーマ作成権限が必要。
+### 3. DBを起動・初期化する
 
 ```sh
-TEST_DATABASE_URL='postgres://stock:stock@127.0.0.1:5432/stock?sslmode=disable' make test-integration
+make db-up
+docker-compose -f deploy/compose.yaml ps
+# healthyになるまで待つ。接続可能ならaccepting connectionsと表示される
+docker-compose -f deploy/compose.yaml exec -T db pg_isready -U stock -d stock
 ```
 
-実際のFMP取得・LINE送信を伴うテストは行わない。初回DB作成、コンテナ起動、スケジュール、バックアップ・復元は[運用手順](deploy/README.md)を参照。
+初回のみスキーマを作成する。適用済みのDBには再実行しない。起動時の自動マイグレーションはない。
+
+```sh
+docker-compose -f deploy/compose.yaml exec -T db \
+  psql -U stock -d stock -v ON_ERROR_STOP=1 -f /migrations/000001_initial.up.sql
+```
+
+`make migrate`はホストの`psql`を使うため、この構成では上記のコンテナ内コマンドを使用する。
+
+### 4. ビルド・API起動
+
+```sh
+make build
+./bin/stock-notification serve
+```
+
+`web_started`ログが表示されれば起動完了。停止はCtrl+C。別ターミナルで次の動作確認を行う。APIだけならフロントエンドの成果物は不要で、画面URLの404は正常。画面を配信する場合は別リポジトリのReact成果物を`web/dist/`へ配置する。
+
+### 5. curlでログイン・設定取得を確認する
+
+別ターミナルでも手順2の環境変数を読み込む。以下はzsh/bashで実行する。パスワードをコマンド履歴へ残さないよう対話入力し、レスポンスヘッダーは権限を制限した一時ディレクトリへ保存する。
+
+```sh
+check_dir=$(mktemp -d)
+chmod 700 "$check_dir"
+# 入力値はこのPCで設定した管理者パスワード
+printf 'Admin password: '
+read -r -s admin_password
+printf '\n'
+# パスワード内のJSON特殊文字をエスケープする
+escaped_password=$(printf '%s' "$admin_password" | sed 's/\\/\\\\/g; s/"/\\"/g')
+printf '{"admin_id":"owner","password":"%s"}' "$escaped_password" | \
+  curl --fail-with-body -sS -D "$check_dir/headers" \
+    -H "Origin: $PUBLIC_ORIGIN" -H 'Content-Type: application/json' \
+    --data-binary @- http://127.0.0.1:8080/api/v1/auth/login
+unset admin_password escaped_password
+
+# HTTPでの確認用に、返された2種類のCookieを明示する
+cookies=$(awk 'tolower($1) == "set-cookie:" {sub(/;.*/, "", $2); printf "%s%s", sep, $2; sep="; "}' "$check_dir/headers")
+curl --fail-with-body -sS -H "Cookie: $cookies" \
+  http://127.0.0.1:8080/api/v1/settings/notifications
+unset cookies
+rm -r "$check_dir"
+unset check_dir
+```
+
+どちらもHTTP 200とJSONが返ることを確認する。`PUBLIC_ORIGIN`はAPIのOrigin検証用設定であり、この設定だけでHTTPSサーバーが起動するわけではない。CookieはSecure固定なので、ブラウザから利用する場合はHTTPSリバースプロキシを別途用意する。更新系APIにはOriginに加えてCSRFトークンが必要。
+
+### 6. テスト
+
+```sh
+make test
+make vet
+# 結合テスト用の専用DBを初回だけ作成する
+docker-compose -f deploy/compose.yaml exec -T db createdb -U stock stock_test
+TEST_DATABASE_URL='postgres://stock:stock@127.0.0.1:5432/stock_test?sslmode=disable' make test-integration
+```
+
+結合テストは一時スキーマへマイグレーションを適用し、終了時にそのスキーマだけを削除する。DBロールにはスキーマ作成権限が必要。`stock_test`が既に存在すれば`createdb`を省略する。実際のFMP取得・LINE送信は行わない。
+
+### 停止・再開とトラブル対応
+
+```sh
+# DBコンテナを停止・削除する（DBデータのボリュームは保持）
+make db-down
+colima stop
+
+# 開発を再開する
+colima start
+docker context use colima
+make db-up
+# .envを読み込んでAPIを起動する。初期マイグレーションは再適用しない
+```
+
+DBデータはDockerボリュームに保存する。通常の停止で`down -v`や`colima delete`は使用しない。
+
+- Dockerへ接続できない場合は`colima status`と`docker context show`を確認し、Colimaを起動して`colima`コンテキストを選ぶ。
+- 5432番が使用中なら`lsof -nP -iTCP:5432 -sTCP:LISTEN`で使用元を確認する。既存サービスを勝手に停止せず、必要ならComposeのホスト側ポートと`.env`・テスト用DB URLを同じ番号へ変更する。
+- APIの8080番が使用中なら`lsof -nP -iTCP:8080 -sTCP:LISTEN`で確認し、必要なら`HTTP_ADDR`とcurlの接続先を変更する。
+- DBが起動しない場合は`docker-compose -f deploy/compose.yaml logs db`で確認する。
+
+本番のコンテナ起動、スケジュール、バックアップ・復元は[運用手順](deploy/README.md)を参照。
