@@ -24,9 +24,9 @@ import (
 	"github.com/hisho-123/stock_notification_backend/internal/adapter/postgres"
 	"github.com/hisho-123/stock_notification_backend/internal/adapter/security"
 	"github.com/hisho-123/stock_notification_backend/internal/domain"
+	"github.com/hisho-123/stock_notification_backend/internal/testfixture"
 	"github.com/hisho-123/stock_notification_backend/internal/usecase"
 	"github.com/jackc/pgx/v5"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type fixedClock struct{ now time.Time }
@@ -267,13 +267,10 @@ func TestAPIAndMonitoring(t *testing.T) {
 	s, raw, _ := database(t)
 	external := mockServices(t)
 	clock := fixedClock{external.now}
-	hash, err := bcrypt.GenerateFromPassword([]byte("correct"), 12)
-	if err != nil {
-		t.Fatal(err)
-	}
+	hash := testfixture.PasswordHash
 	api := &httpapi.Server{PublicOrigin: "https://stock.example.com", Clock: clock,
 		Assets: usecase.Assets{Repository: s, Prices: external.prices, Clock: clock}, Settings: usecase.Settings{Repository: s, Clock: clock},
-		Auth: usecase.Auth{Repository: s, Passwords: security.Passwords{}, Tokens: security.Tokens{}, Clock: clock, AdminID: "owner", PasswordHash: string(hash)},
+		Auth: usecase.Auth{Repository: s, Passwords: security.Passwords{}, Tokens: security.Tokens{}, Clock: clock, AdminID: "owner", PasswordHash: hash},
 	}
 	handler := api.Handler()
 	var cookies []*http.Cookie

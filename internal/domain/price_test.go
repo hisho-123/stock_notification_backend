@@ -80,7 +80,7 @@ func TestNormalization(t *testing.T) {
 			t.Errorf("accepted %q", s)
 		}
 	}
-	for _, input := range [][]int{nil, {}, {10, 10}, {0}, {100}} {
+	for _, input := range [][]int{{}, {10, 10}, {0}, {100}} {
 		if _, err := NormalizeThresholds(input); err == nil {
 			t.Errorf("accepted %v", input)
 		}

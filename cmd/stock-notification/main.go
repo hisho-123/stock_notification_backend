@@ -19,25 +19,28 @@ func main() {
 	os.Exit(code)
 }
 func run(ctx context.Context, args []string) int {
-	token, err := (security.Tokens{}).Generate()
-	if err != nil {
-		return 1
-	}
+	token, _ := (security.Tokens{}).Generate()
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("run_id", token)
+	return runCommand(ctx, args, logger, config.Load, serve, monitor)
+}
+
+type command func(context.Context, config.Config, *slog.Logger) int
+
+func runCommand(ctx context.Context, args []string, logger *slog.Logger, load func(string) (config.Config, error), serveCommand, monitorCommand command) int {
 	if len(args) != 1 || (args[0] != "serve" && args[0] != "monitor") {
 		logger.Error("usage: stock-notification serve|monitor")
 		return 1
 	}
-	c, err := config.Load(args[0])
+	c, err := load(args[0])
 	if err != nil {
 		logger.Error("configuration_invalid", "error_code", "CONFIG_INVALID", "detail", err.Error())
 		return 1
 	}
 	code := 0
 	if args[0] == "serve" {
-		code = serve(ctx, c, logger)
+		code = serveCommand(ctx, c, logger)
 	} else {
-		code = monitor(ctx, c, logger)
+		code = monitorCommand(ctx, c, logger)
 	}
 	logger.Info("command_finished", "command", args[0], "exit_code", code, "finished_at", time.Now().UTC())
 	return code

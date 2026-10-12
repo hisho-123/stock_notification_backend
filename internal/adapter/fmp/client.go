@@ -7,7 +7,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strconv"
 	"time"
 
@@ -35,20 +34,16 @@ func New(apiKey string, client *http.Client) *Client {
 	return &Client{APIKey: apiKey, Endpoint: endpoint, HTTP: &h, Now: time.Now}
 }
 func (c *Client) Fetch(ctx context.Context, code string) (domain.Quote, error) {
-	u, err := url.Parse(c.Endpoint)
-	if err != nil {
-		return domain.Quote{}, usecase.ErrPriceProvider
-	}
-	query := u.Query()
-	query.Set("symbol", code)
-	query.Set("apikey", c.APIKey)
-	u.RawQuery = query.Encode()
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Endpoint, nil)
 	if err != nil {
 		return domain.Quote{}, usecase.ErrPriceProvider
 	}
+	query := req.URL.Query()
+	query.Set("symbol", code)
+	query.Set("apikey", c.APIKey)
+	req.URL.RawQuery = query.Encode()
 	req.Header.Set("Accept", "application/json")
 	res, err := c.HTTP.Do(req)
 	if err != nil {

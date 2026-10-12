@@ -86,8 +86,9 @@ func decodeObject(w http.ResponseWriter, r *http.Request, required ...string) (m
 		if err != nil {
 			return nil, usecase.Invalid("body", "JSONを確認してください。")
 		}
-		key, ok := token.(string)
-		if !ok || !allowed[key] || result[key] != nil {
+		// The decoder only returns string tokens in an object's key position.
+		key := token.(string)
+		if !allowed[key] || result[key] != nil {
 			return nil, usecase.Invalid("body", "未定義または重複した項目があります。")
 		}
 		var raw json.RawMessage

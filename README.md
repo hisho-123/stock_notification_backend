@@ -129,9 +129,13 @@ make vet
 # 結合テスト用の専用DBを初回だけ作成する
 docker-compose -f deploy/compose.yaml exec -T db createdb -U stock stock_test
 TEST_DATABASE_URL='postgres://stock:stock@127.0.0.1:5432/stock_test?sslmode=disable' make test-integration
+# 通常・結合・CLIを合算したC0/C1の100%検査（Python 3.9以降が必要）
+TEST_DATABASE_URL='postgres://stock:stock@127.0.0.1:5432/stock_test?sslmode=disable' make coverage
 ```
 
 結合テストは一時スキーマへマイグレーションを適用し、終了時にそのスキーマだけを削除する。DBロールにはスキーマ作成権限が必要。`stock_test`が既に存在すれば`createdb`を省略する。実際のFMP取得・LINE送信は行わない。
+
+カバレッジの判定範囲、分岐とテストの対応表、テスト整理の方針は[テストとカバレッジ](docs/testing.md)を参照。
 
 ### 停止・再開とトラブル対応
 
