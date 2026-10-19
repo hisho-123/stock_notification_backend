@@ -9,7 +9,7 @@ import (
 
 func (s *Store) FindSession(ctx context.Context, hash string) (domain.Session, error) {
 	var session domain.Session
-	err := s.q.QueryRow(ctx, `SELECT token_hash,csrf_token_hash,created_at,expires_at FROM sessions WHERE token_hash=$1`, hash).Scan(&session.TokenHash, &session.CSRFTokenHash, &session.CreatedAt, &session.ExpiresAt)
+	err := s.q.QueryRow(ctx, `SELECT login_id,token_hash,csrf_token_hash,created_at,expires_at FROM sessions WHERE token_hash=$1`, hash).Scan(&session.LoginID, &session.TokenHash, &session.CSRFTokenHash, &session.CreatedAt, &session.ExpiresAt)
 	return session, s.mapError(err)
 }
 func (s *Store) ReplaceSession(ctx context.Context, oldHash string, session domain.Session) error {
@@ -23,7 +23,7 @@ func (s *Store) ReplaceSession(ctx context.Context, oldHash string, session doma
 			return s.mapError(err)
 		}
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO sessions (token_hash,csrf_token_hash,created_at,expires_at) VALUES ($1,$2,$3,$4)`, session.TokenHash, session.CSRFTokenHash, session.CreatedAt, session.ExpiresAt)
+	_, err = tx.Exec(ctx, `INSERT INTO sessions (token_hash,csrf_token_hash,created_at,expires_at,login_id) VALUES ($1,$2,$3,$4,$5)`, session.TokenHash, session.CSRFTokenHash, session.CreatedAt, session.ExpiresAt, session.LoginID)
 	if err != nil {
 		return s.mapError(err)
 	}

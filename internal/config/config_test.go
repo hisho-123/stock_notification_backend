@@ -3,21 +3,18 @@ package config
 import (
 	"strings"
 	"testing"
-
-	"github.com/hisho-123/stock_notification_backend/internal/testfixture"
 )
 
 func TestCommandSpecificConfiguration(t *testing.T) {
-	values := map[string]string{"DATABASE_URL": "secret-db-url", "FMP_API_KEY": "secret-api-key", "LINE_TOKEN": "token", "LINE_USER_ID": "user"}
+	values := map[string]string{"DATABASE_URL": "secret-db-url", "FMP_API_KEY": "secret-api-key", "LINE_TOKEN": "token"}
 	get := func(key string) string { return values[key] }
 	if _, err := FromEnv("monitor", get); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := FromEnv("serve", get); err == nil {
-		t.Fatal("missing auth allowed")
+		t.Fatal("missing webhook configuration accepted")
 	}
-	hash := testfixture.PasswordHash
-	values["ADMIN_ID"], values["ADMIN_PASSWORD_HASH"], values["PUBLIC_ORIGIN"] = "owner", hash, "https://stock.example.com"
+	values["LINE_CHANNEL_SECRET"], values["PUBLIC_ORIGIN"] = "channel-secret", "https://stock.example.com"
 	c, err := FromEnv("serve", get)
 	if err != nil || c.HTTPAddr != "127.0.0.1:8080" {
 		t.Fatal(c, err)
@@ -29,42 +26,14 @@ func TestCommandSpecificConfiguration(t *testing.T) {
 		}
 	}
 }
-
-func TestServeRejectsInvalidPasswordHashes(t *testing.T) {
-	hash := testfixture.PasswordHash
-	valid := hash
-	tests := []struct {
-		name string
-		hash string
-	}{
-		{name: "truncated", hash: valid[:59]},
-		{name: "low cost", hash: strings.Replace(valid, "$12$", "$11$", 1)},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			values := map[string]string{
-				"DATABASE_URL":        "secret-db-url",
-				"FMP_API_KEY":         "secret-api-key",
-				"LINE_TOKEN":          "secret-line-token",
-				"LINE_USER_ID":        "user",
-				"ADMIN_ID":            "owner",
-				"ADMIN_PASSWORD_HASH": tt.hash,
-				"PUBLIC_ORIGIN":       "https://stock.example.com",
-			}
-			get := func(key string) string { return values[key] }
-			_, err := FromEnv("serve", get)
-			if err == nil {
-				t.Fatal("invalid password hash accepted")
-			}
-			if !strings.Contains(err.Error(), "ADMIN_PASSWORD_HASH") {
-				t.Fatalf("unexpected configuration error: %v", err)
-			}
-			if strings.Contains(err.Error(), tt.hash) || strings.Contains(err.Error(), "secret") {
-				t.Fatal("configuration error leaked a secret")
-			}
-			if _, err := FromEnv("monitor", get); err != nil {
-				t.Fatalf("monitor must not require an admin password hash: %v", err)
-			}
-		})
+func TestLegacyAdministratorSettingsAreUnused(t *testing.T) {
+	values := validEnv()
+	values["ADMIN_ID"] = ""
+	values["ADMIN_PASSWORD_HASH"] = "invalid"
+	values["LINE_USER_ID"] = ""
+	for _, cmd := range []string{"serve", "monitor"} {
+		if _, err := FromEnv(cmd, func(k string) string { return values[k] }); err != nil {
+			t.Fatal(err)
+		}
 	}
 }

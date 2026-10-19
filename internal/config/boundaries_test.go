@@ -4,24 +4,21 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-
-	"github.com/hisho-123/stock_notification_backend/internal/testfixture"
 )
 
 func validEnv() map[string]string {
 	return map[string]string{
-		"DATABASE_URL": "secret-db-url", "FMP_API_KEY": "secret-api-key", "LINE_TOKEN": "secret-token", "LINE_USER_ID": "user",
-		"ADMIN_ID": "owner", "ADMIN_PASSWORD_HASH": testfixture.PasswordHash, "PUBLIC_ORIGIN": "https://stock.example.com",
+		"DATABASE_URL": "secret-db-url", "FMP_API_KEY": "secret-api-key", "LINE_TOKEN": "secret-token",
+		"LINE_CHANNEL_SECRET": "owner", "PUBLIC_ORIGIN": "https://stock.example.com",
 	}
 }
 
 func TestRequiredEnvironmentVariables(t *testing.T) {
 	for _, command := range []string{"serve", "monitor"} {
-		keys := []string{"DATABASE_URL", "FMP_API_KEY"}
+		keys := []string{"DATABASE_URL", "FMP_API_KEY", "LINE_TOKEN"}
 		if command == "serve" {
-			keys = append(keys, "ADMIN_ID", "ADMIN_PASSWORD_HASH", "PUBLIC_ORIGIN")
-		} else {
-			keys = append(keys, "LINE_TOKEN", "LINE_USER_ID")
+			keys = append(keys, "LINE_CHANNEL_SECRET", "PUBLIC_ORIGIN")
+
 		}
 		for _, key := range keys {
 			t.Run(command+"/"+key, func(t *testing.T) {
@@ -39,7 +36,7 @@ func TestRequiredEnvironmentVariables(t *testing.T) {
 func TestConfigurationBoundariesAndOverrides(t *testing.T) {
 	t.Chdir(t.TempDir())
 	for _, tc := range []struct{ name, key, value string }{
-		{"invalid ID UTF8", "ADMIN_ID", "\xff"}, {"long ID", "ADMIN_ID", strings.Repeat("界", 101)},
+
 		{"bad address", "HTTP_ADDR", "localhost"}, {"bad proxies", "TRUSTED_PROXY_CIDRS", "10.0.0.0/8,bad"},
 		{"bad URL", "PUBLIC_ORIGIN", "https://%zz"}, {"no host", "PUBLIC_ORIGIN", "https:"},
 		{"empty hostname", "PUBLIC_ORIGIN", "https://:443"}, {"fragment", "PUBLIC_ORIGIN", "https://stock.example.com#x"},
@@ -61,10 +58,6 @@ func TestConfigurationBoundariesAndOverrides(t *testing.T) {
 	c, err := FromEnv("serve", func(k string) string { return values[k] })
 	if err != nil || c.HTTPAddr != values["HTTP_ADDR"] || c.StaticDir != "/tmp/web" || len(c.TrustedProxies) != 2 || c.TrustedProxies[1].String() != "2001:db8::/32" {
 		t.Fatal(c, err)
-	}
-	values["ADMIN_ID"] = strings.Repeat("界", 100)
-	if _, err := FromEnv("serve", func(k string) string { return values[k] }); err != nil {
-		t.Fatal(err)
 	}
 	for key, value := range validEnv() {
 		t.Setenv(key, value)

@@ -12,14 +12,14 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-const assetColumns = `id, code, name, highest_value::text, latest_value::text, latest_fetched_at,
+const assetColumns = `id, login_id, code, name, highest_value::text, latest_value::text, latest_fetched_at,
  monitoring_enabled, last_notified_threshold, last_checked_at, last_error_code, created_at, updated_at`
 
 func scanAsset(row pgx.Row) (domain.Asset, error) {
 	var a domain.Asset
 	var high, latest string
 	var errorCode *string
-	err := row.Scan(&a.ID, &a.Code, &a.Name, &high, &latest, &a.LatestFetchedAt, &a.MonitoringEnabled, &a.LastNotifiedThreshold, &a.LastCheckedAt, &errorCode, &a.CreatedAt, &a.UpdatedAt)
+	err := row.Scan(&a.ID, &a.LoginID, &a.Code, &a.Name, &high, &latest, &a.LatestFetchedAt, &a.MonitoringEnabled, &a.LastNotifiedThreshold, &a.LastCheckedAt, &errorCode, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return a, err
 	}
@@ -50,8 +50,8 @@ func (s *Store) List(ctx context.Context, o usecase.ListOptions) ([]domain.Asset
 	// Escape LIKE metacharacters; the column and direction come only from allowlists.
 	query := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(o.Query)
 	rows, err := s.q.Query(ctx, fmt.Sprintf(`SELECT %s FROM assets
- WHERE code ILIKE $1 ESCAPE '\' OR name ILIKE $1 ESCAPE '\'
- ORDER BY %s %s NULLS LAST, id ASC`, assetColumns, column, o.Order), "%"+query+"%")
+ WHERE login_id=$2 AND (code ILIKE $1 ESCAPE '\' OR name ILIKE $1 ESCAPE '\')
+ ORDER BY %s %s NULLS LAST, id ASC`, assetColumns, column, o.Order), "%"+query+"%", usecase.LoginID(ctx))
 	if err != nil {
 		return nil, s.mapError(err)
 	}
@@ -85,26 +85,26 @@ func (s *Store) List(ctx context.Context, o usecase.ListOptions) ([]domain.Asset
 }
 func (s *Store) ExistsCode(ctx context.Context, code string) (bool, error) {
 	var exists bool
-	err := s.q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM assets WHERE code=$1)`, code).Scan(&exists)
+	err := s.q.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM assets WHERE code=$1 AND login_id=$2)`, code, usecase.LoginID(ctx)).Scan(&exists)
 	return exists, s.mapError(err)
 }
 func (s *Store) Create(ctx context.Context, a domain.Asset) (domain.Asset, error) {
 	a, err := scanAsset(s.q.QueryRow(ctx, `INSERT INTO assets
- (code,name,highest_value,latest_value,latest_fetched_at,monitoring_enabled,last_notified_threshold,last_checked_at,last_error_code,created_at,updated_at)
- VALUES ($1,$2,$3::numeric,$4::numeric,$5,$6,$7,$8,$9,$10,$11) RETURNING `+assetColumns,
-		a.Code, a.Name, a.HighestValue.String(), a.LatestValue.String(), a.LatestFetchedAt, a.MonitoringEnabled, a.LastNotifiedThreshold, a.LastCheckedAt, errorValue(a.LastErrorCode), a.CreatedAt, a.UpdatedAt))
+ (login_id,code,name,highest_value,latest_value,latest_fetched_at,monitoring_enabled,last_notified_threshold,last_checked_at,last_error_code,created_at,updated_at)
+ VALUES ($12,$1,$2,$3::numeric,$4::numeric,$5,$6,$7,$8,$9,$10,$11) RETURNING `+assetColumns,
+		a.Code, a.Name, a.HighestValue.String(), a.LatestValue.String(), a.LatestFetchedAt, a.MonitoringEnabled, a.LastNotifiedThreshold, a.LastCheckedAt, errorValue(a.LastErrorCode), a.CreatedAt, a.UpdatedAt, usecase.LoginID(ctx)))
 	return a, s.mapError(err)
 }
 func (s *Store) Get(ctx context.Context, id int64) (domain.Asset, error) {
-	a, err := scanAsset(s.q.QueryRow(ctx, `SELECT `+assetColumns+` FROM assets WHERE id=$1`, id))
+	a, err := scanAsset(s.q.QueryRow(ctx, `SELECT `+assetColumns+` FROM assets WHERE id=$1 AND login_id=$2`, id, usecase.LoginID(ctx)))
 	return a, s.mapError(err)
 }
 func (s *Store) SetMonitoring(ctx context.Context, id int64, enabled bool, now time.Time) (domain.Asset, error) {
-	a, err := scanAsset(s.q.QueryRow(ctx, `UPDATE assets SET monitoring_enabled=$2,updated_at=$3 WHERE id=$1 RETURNING `+assetColumns, id, enabled, now))
+	a, err := scanAsset(s.q.QueryRow(ctx, `UPDATE assets SET monitoring_enabled=$2,updated_at=$3 WHERE id=$1 AND login_id=$4 RETURNING `+assetColumns, id, enabled, now, usecase.LoginID(ctx)))
 	return a, s.mapError(err)
 }
 func (s *Store) Delete(ctx context.Context, id int64) error {
-	tag, err := s.q.Exec(ctx, `DELETE FROM assets WHERE id=$1`, id)
+	tag, err := s.q.Exec(ctx, `DELETE FROM assets WHERE id=$1 AND login_id=$2`, id, usecase.LoginID(ctx))
 	if err != nil {
 		return s.mapError(err)
 	}
@@ -114,7 +114,7 @@ func (s *Store) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 func (s *Store) Targets(ctx context.Context) ([]usecase.Target, error) {
-	rows, err := s.q.Query(ctx, `SELECT id,code FROM assets WHERE monitoring_enabled ORDER BY id`)
+	rows, err := s.q.Query(ctx, `SELECT id,code,login_id FROM assets WHERE monitoring_enabled ORDER BY id`)
 	if err != nil {
 		return nil, s.mapError(err)
 	}
@@ -122,7 +122,7 @@ func (s *Store) Targets(ctx context.Context) ([]usecase.Target, error) {
 	result := make([]usecase.Target, 0)
 	for rows.Next() {
 		var target usecase.Target
-		if err := rows.Scan(&target.ID, &target.Code); err != nil {
+		if err := rows.Scan(&target.ID, &target.Code, &target.LoginID); err != nil {
 			return nil, s.mapError(err)
 		}
 		result = append(result, target)
@@ -132,8 +132,8 @@ func (s *Store) Targets(ctx context.Context) ([]usecase.Target, error) {
 func (s *Store) SaveObservation(ctx context.Context, a domain.Asset) error {
 	// A deletion racing this write is explicitly outside the consistency guarantee.
 	_, err := s.q.Exec(ctx, `UPDATE assets SET highest_value=$2::numeric,latest_value=$3::numeric,
- latest_fetched_at=$4,monitoring_enabled=$5,last_notified_threshold=$6,last_checked_at=$7,last_error_code=$8,updated_at=$9 WHERE id=$1`,
-		a.ID, a.HighestValue.String(), a.LatestValue.String(), a.LatestFetchedAt, a.MonitoringEnabled, a.LastNotifiedThreshold, a.LastCheckedAt, errorValue(a.LastErrorCode), a.UpdatedAt)
+ latest_fetched_at=$4,monitoring_enabled=$5,last_notified_threshold=$6,last_checked_at=$7,last_error_code=$8,updated_at=$9 WHERE id=$1 AND login_id=$10`,
+		a.ID, a.HighestValue.String(), a.LatestValue.String(), a.LatestFetchedAt, a.MonitoringEnabled, a.LastNotifiedThreshold, a.LastCheckedAt, errorValue(a.LastErrorCode), a.UpdatedAt, usecase.LoginID(ctx))
 	return s.mapError(err)
 }
 func errorValue(code *domain.AssetError) any {

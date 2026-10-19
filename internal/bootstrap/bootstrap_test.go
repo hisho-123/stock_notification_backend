@@ -3,7 +3,11 @@ package bootstrap
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +24,9 @@ type storeStub struct {
 	usecase.AssetRepository
 	usecase.SessionRepository
 	usecase.Transaction
+	usecase.UserRepository
+	usecase.RegistrationRepository
+	usecase.SnapshotRepository
 	cleanupErr, settingsErr error
 	closed                  int
 	asset                   domain.Asset
@@ -71,20 +78,20 @@ func (p pricesStub) Fetch(context.Context, string) (domain.Quote, error) { retur
 
 type notifierStub struct{ messages []string }
 
-func (n *notifierStub) Send(_ context.Context, message string) error {
+func (n *notifierStub) Send(_ context.Context, _ string, message string) error {
 	n.messages = append(n.messages, message)
 	return nil
 }
 
 func TestServeStartupFailuresReleaseResources(t *testing.T) {
-	for _, stage := range []string{"open", "cleanup", "settings"} {
+	for _, stage := range []string{"open", "cleanup", "tokens"} {
 		t.Run(stage, func(t *testing.T) {
 			s := &storeStub{}
 			var startup context.Context
 			if stage == "cleanup" {
 				s.cleanupErr = usecase.ErrUnavailable
 			}
-			if stage == "settings" {
+			if stage == "tokens" {
 				s.settingsErr = usecase.ErrUnavailable
 			}
 			open := func(ctx context.Context, url string) (store, error) {
@@ -212,5 +219,57 @@ func TestPublicBootstrapConnectionFailures(t *testing.T) {
 	}
 	if _, err := Monitor(context.Background(), c, logger); !errors.Is(err, usecase.ErrUnavailable) {
 		t.Fatal(err)
+	}
+}
+
+func (s *storeStub) DeleteExpiredRegistrationTokens(context.Context, time.Time) error {
+	return s.settingsErr
+}
+func (s *storeStub) MonitoringSnapshot(ctx context.Context) (usecase.MonitoringSnapshot, error) {
+	targets, err := s.Targets(ctx)
+	if err != nil {
+		return usecase.MonitoringSnapshot{}, err
+	}
+	settings, err := s.GetSettings(ctx)
+	return usecase.MonitoringSnapshot{Targets: targets, Settings: map[string]domain.NotificationSettings{"": settings}}, err
+}
+func (s *storeStub) FindUser(context.Context, string) (domain.User, error) {
+	return domain.User{LINEFollowing: true, LINEUserID: "U00000000000000000000000000000001"}, nil
+}
+
+func (s *storeStub) ProcessLINEEvent(context.Context, domain.LINEEvent, domain.RegistrationToken, string, string, time.Time) (domain.LINEReply, error) {
+	return domain.LINEReply{Text: "registration URL"}, nil
+}
+func (s *storeStub) SaveLINEReply(context.Context, string, string) error { return nil }
+
+type lineTransport struct{}
+
+func (lineTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("")), Request: r}, nil
+}
+func TestServeWiresSignedLINEWebhookAndLogsReceipt(t *testing.T) {
+	original := http.DefaultTransport
+	http.DefaultTransport = lineTransport{}
+	defer func() { http.DefaultTransport = original }()
+	s := &storeStub{}
+	server := &serverStub{started: make(chan struct{}), stop: make(chan struct{}), listenErr: http.ErrServerClosed}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	err := serveWith(context.Background(), config.Config{LINEChannelSecret: "secret", PublicOrigin: "https://stock.example.com"}, logger, func(context.Context, string) (store, error) { return s, nil }, func(c *http.Server) httpServer {
+		body := `{"destination":"bot","events":[{"type":"follow","webhookEventId":"receipt","timestamp":1,"source":{"type":"user","userId":"U00000000000000000000000000000002"},"replyToken":"secret-reply"}]}`
+		mac := hmac.New(sha256.New, []byte("secret"))
+		mac.Write([]byte(body))
+		r := httptest.NewRequest("POST", "https://stock.example.com/api/v1/webhooks/line", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("X-Line-Signature", base64.StdEncoding.EncodeToString(mac.Sum(nil)))
+		w := httptest.NewRecorder()
+		c.Handler.ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Error(w.Code, w.Body.String())
+		}
+		return server
+	})
+	if err != nil || !strings.Contains(logs.String(), `"msg":"line_reply"`) || !strings.Contains(logs.String(), `"reply_status":"sent"`) || strings.Contains(logs.String(), "secret") || strings.Contains(logs.String(), "U00000000000000000000000000000002") {
+		t.Fatal(err, logs.String())
 	}
 }

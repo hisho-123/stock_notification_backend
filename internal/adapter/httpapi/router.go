@@ -12,6 +12,10 @@ type Server struct {
 	Assets                  usecase.Assets
 	Settings                usecase.Settings
 	Auth                    usecase.Auth
+	Registration            usecase.Registration
+	Webhook                 usecase.LINEWebhook
+	LINEChannelSecret       string
+	registrationLimiter     *attemptLimiter
 	Clock                   usecase.Clock
 	PublicOrigin, StaticDir string
 	TrustedProxies          []netip.Prefix
@@ -20,8 +24,12 @@ type Server struct {
 
 func (s *Server) Handler() http.Handler {
 	s.limiter = &attemptLimiter{failures: make(map[string][]time.Time)}
+	s.registrationLimiter = &attemptLimiter{failures: make(map[string][]time.Time), limit: 30}
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/auth/login", s.login)
+	mux.HandleFunc("POST /api/v1/auth/registration/validate", s.validateRegistration)
+	mux.HandleFunc("POST /api/v1/auth/register", s.register)
+	mux.HandleFunc("POST /api/v1/webhooks/line", s.lineWebhook)
 	mux.HandleFunc("GET /api/v1/auth/session", s.getSession)
 	mux.HandleFunc("POST /api/v1/auth/logout", s.logout)
 	mux.HandleFunc("GET /api/v1/assets", s.listAssets)

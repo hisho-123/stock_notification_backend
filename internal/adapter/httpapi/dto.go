@@ -45,13 +45,13 @@ func settingsResponse(s domain.NotificationSettings) settingsDTO {
 }
 
 type sessionDTO struct {
-	AdminID   string `json:"admin_id"`
+	LoginID   string `json:"login_id"`
 	ExpiresAt string `json:"expires_at"`
 	CSRFToken string `json:"csrf_token"`
 }
 
 func sessionResponse(s usecase.Authenticated) sessionDTO {
-	return sessionDTO{s.AdminID, date(s.Session.ExpiresAt), s.CSRFToken}
+	return sessionDTO{s.LoginID, date(s.Session.ExpiresAt), s.CSRFToken}
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

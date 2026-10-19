@@ -21,7 +21,7 @@ func (c *testClock) Now() time.Time { return c.now }
 
 type testPasswords struct{}
 
-func (testPasswords) Matches(_, password string) bool { return password == "correct" }
+func (testPasswords) Matches(_, password string) bool { return password == "correct-password" }
 
 type testSessions struct {
 	usecase.SessionRepository
@@ -132,7 +132,7 @@ func newFixture() fixture {
 	assets := &testAssets{}
 	price, _ := domain.ParsePrice("100")
 	prices := &testPrices{quote: domain.Quote{Price: price, Name: "Apple", ProvidedAt: clock.now, FetchedAt: clock.now}}
-	api := &Server{PublicOrigin: "https://stock.example.com", Clock: clock, Assets: usecase.Assets{Repository: assets, Prices: prices, Clock: clock}, Settings: usecase.Settings{Repository: settings, Clock: clock}, Auth: usecase.Auth{Repository: sessions, Tokens: security.Tokens{}, Passwords: testPasswords{}, Clock: clock, AdminID: "owner"}}
+	api := &Server{PublicOrigin: "https://stock.example.com", Clock: clock, Assets: usecase.Assets{Repository: assets, Prices: prices, Clock: clock}, Settings: usecase.Settings{Repository: settings, Clock: clock}, Auth: usecase.Auth{Repository: sessions, Tokens: security.Tokens{}, Passwords: testPasswords{}, Clock: clock, Users: testUsers{}}}
 	return fixture{handler: api.Handler(), server: api, sessions: sessions, settings: settings, clock: clock, assets: assets, prices: prices}
 }
 func (f fixture) request(method, path, body string, cookies []*http.Cookie, csrf string, modify func(*http.Request)) *httptest.ResponseRecorder {
@@ -155,7 +155,7 @@ func (f fixture) request(method, path, body string, cookies []*http.Cookie, csrf
 }
 func (f fixture) login(t *testing.T) ([]*http.Cookie, string) {
 	t.Helper()
-	w := f.request("POST", "/api/v1/auth/login", `{"admin_id":"owner","password":"correct"}`, nil, "", nil)
+	w := f.request("POST", "/api/v1/auth/login", `{"login_id":"owner","password":"correct-password"}`, nil, "", nil)
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
@@ -213,7 +213,7 @@ func TestSessionLifecycleAndCookies(t *testing.T) {
 func TestLoginReplacesExistingSession(t *testing.T) {
 	f := newFixture()
 	old, _ := f.login(t)
-	w := f.request("POST", "/api/v1/auth/login", `{"admin_id":"owner","password":"correct"}`, old, "", nil)
+	w := f.request("POST", "/api/v1/auth/login", `{"login_id":"owner","password":"correct-password"}`, old, "", nil)
 	if w.Code != 200 || len(f.sessions.rows) != 1 {
 		t.Fatal(w.Code)
 	}
@@ -277,12 +277,12 @@ func TestCSRFAndStrictInputs(t *testing.T) {
 func TestLoginFailureWindow(t *testing.T) {
 	f := newFixture()
 	for i := 0; i < 5; i++ {
-		w := f.request("POST", "/api/v1/auth/login", `{"admin_id":"owner","password":"wrong"}`, nil, "", func(r *http.Request) { r.Header.Set("X-Forwarded-For", "203.0.113."+string(rune('1'+i))) })
+		w := f.request("POST", "/api/v1/auth/login", `{"login_id":"owner","password":"wrong-password"}`, nil, "", func(r *http.Request) { r.Header.Set("X-Forwarded-For", "203.0.113."+string(rune('1'+i))) })
 		if w.Code != 401 {
 			t.Fatal(w.Code)
 		}
 	}
-	w := f.request("POST", "/api/v1/auth/login", `{"admin_id":"owner","password":"correct"}`, nil, "", nil)
+	w := f.request("POST", "/api/v1/auth/login", `{"login_id":"owner","password":"correct-password"}`, nil, "", nil)
 	if w.Code != 429 || w.Header().Get("Retry-After") != "900" {
 		t.Fatal(w.Code, w.Header())
 	}
@@ -301,4 +301,13 @@ func TestTrustedProxyChain(t *testing.T) {
 	if got := s.clientIP(r); got != "192.0.2.1" {
 		t.Fatal(got)
 	}
+}
+
+type testUsers struct{}
+
+func (testUsers) FindUser(_ context.Context, id string) (domain.User, error) {
+	if id != "owner" {
+		return domain.User{}, usecase.ErrNotFound
+	}
+	return domain.User{LoginID: id, PasswordHash: "hash", LINEUserID: "U00000000000000000000000000000001", LINEFollowing: true}, nil
 }

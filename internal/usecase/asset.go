@@ -33,7 +33,7 @@ func (s Assets) Create(ctx context.Context, input string) (domain.Asset, error) 
 	if !q.Price.Valid() || q.FetchedAt.IsZero() {
 		return domain.Asset{}, ErrPriceProvider
 	}
-	a := domain.Asset{Code: code, Name: domain.NormalizeName(q.Name, code), HighestValue: q.Price, LatestValue: q.Price, LatestFetchedAt: q.FetchedAt, LastCheckedAt: q.FetchedAt, MonitoringEnabled: !q.Stale(), CreatedAt: q.FetchedAt, UpdatedAt: q.FetchedAt}
+	a := domain.Asset{LoginID: LoginID(ctx), Code: code, Name: domain.NormalizeName(q.Name, code), HighestValue: q.Price, LatestValue: q.Price, LatestFetchedAt: q.FetchedAt, LastCheckedAt: q.FetchedAt, MonitoringEnabled: !q.Stale(), CreatedAt: q.FetchedAt, UpdatedAt: q.FetchedAt}
 	if q.Stale() {
 		e := domain.PriceDataStale
 		a.LastErrorCode = &e

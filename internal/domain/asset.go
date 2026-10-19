@@ -18,7 +18,7 @@ const (
 
 type Asset struct {
 	ID                        int64
-	Code, Name                string
+	LoginID, Code, Name       string
 	HighestValue, LatestValue Price
 	LatestFetchedAt           time.Time
 	MonitoringEnabled         bool

@@ -64,8 +64,8 @@ func TestInvalidObjectsAndHandlerInputs(t *testing.T) {
 		{"body read error", "POST", "/api/v1/assets", "", func(r *http.Request) { r.Body = brokenBody{} }},
 		{"bad patch ID", "PATCH", "/api/v1/assets/a", `{"monitoring_enabled":true}`, nil},
 		{"bad boolean", "PATCH", "/api/v1/assets/1", `{"monitoring_enabled":"true"}`, nil},
-		{"bad login ID type", "POST", "/api/v1/auth/login", `{"admin_id":42,"password":"correct"}`, nil},
-		{"bad password type", "POST", "/api/v1/auth/login", `{"admin_id":"owner","password":42}`, nil},
+		{"bad login ID type", "POST", "/api/v1/auth/login", `{"login_id":42,"password":"correct-password"}`, nil},
+		{"bad password type", "POST", "/api/v1/auth/login", `{"login_id":"owner","password":42}`, nil},
 		{"bad login body", "POST", "/api/v1/auth/login", `{}`, nil},
 		{"not array", "PUT", "/api/v1/settings/notifications", `{"thresholds":10}`, nil},
 		{"empty thresholds", "PUT", "/api/v1/settings/notifications", `{"thresholds":[]}`, nil},
@@ -102,7 +102,7 @@ func TestHTTPDependencyErrorsAndAssetResponses(t *testing.T) {
 		{"settings save", "PUT", "/api/v1/settings/notifications", `{"thresholds":[10]}`, usecase.ErrUnavailable, 503},
 		{"logout failure", "POST", "/api/v1/auth/logout", "", usecase.ErrUnavailable, 503},
 		{"authenticate failure", "GET", "/api/v1/assets", "", usecase.ErrUnavailable, 503},
-		{"login save failure", "POST", "/api/v1/auth/login", `{"admin_id":"owner","password":"correct"}`, usecase.ErrUnavailable, 503},
+		{"login save failure", "POST", "/api/v1/auth/login", `{"login_id":"owner","password":"correct-password"}`, usecase.ErrUnavailable, 503},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFixture()
@@ -223,7 +223,7 @@ func TestProxyFallbacksAndPartialFailureWindow(t *testing.T) {
 	}
 	f := newFixture()
 	for i := 0; i < 4; i++ {
-		f.request("POST", "/api/v1/auth/login", `{"admin_id":"owner","password":"wrong"}`, nil, "", nil)
+		f.request("POST", "/api/v1/auth/login", `{"login_id":"owner","password":"wrong-password"}`, nil, "", nil)
 	}
 	f.login(t)
 	if len(f.server.limiter.failures) != 0 {

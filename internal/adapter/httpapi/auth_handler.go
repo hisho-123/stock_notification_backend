@@ -21,9 +21,9 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		}{apiError{"TOO_MANY_ATTEMPTS", "時間をおいて再試行してください。", map[string]string{}}})
 		return
 	}
-	fields, err := decodeObject(w, r, "admin_id", "password")
+	fields, err := decodeObject(w, r, "login_id", "password")
 	var id, password string
-	if err == nil && (json.Unmarshal(fields["admin_id"], &id) != nil || json.Unmarshal(fields["password"], &password) != nil) {
+	if err == nil && (json.Unmarshal(fields["login_id"], &id) != nil || json.Unmarshal(fields["password"], &password) != nil) {
 		err = usecase.Invalid("body", "IDとパスワードは文字列で指定してください。")
 	}
 	if err != nil {

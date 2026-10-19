@@ -10,14 +10,14 @@ import (
 )
 
 type Auth struct {
-	Repository            SessionRepository
-	Passwords             PasswordVerifier
-	Tokens                Tokens
-	Clock                 Clock
-	AdminID, PasswordHash string
+	Repository SessionRepository
+	Users      UserRepository
+	Passwords  PasswordVerifier
+	Tokens     Tokens
+	Clock      Clock
 }
 type Authenticated struct {
-	AdminID, CSRFToken string
+	LoginID, CSRFToken string
 	Session            domain.Session
 }
 type LoginResult struct {
@@ -25,17 +25,19 @@ type LoginResult struct {
 	Token string
 }
 
-func (s Auth) Login(ctx context.Context, id, password, oldToken string) (LoginResult, error) {
+// 未知のIDにもcost 12の照合を行い、存在有無による処理差を抑える。
+const dummyPasswordHash = "$2a$12$Y05J1ICMqsQPaCvKOv37iuDcdysE7wpit/M.LKHWlXGlATfZSdNyS"
+
+func validateCredentials(id, password string) error {
 	if !utf8.ValidString(id) || utf8.RuneCountInString(id) < 1 || utf8.RuneCountInString(id) > 100 {
-		return LoginResult{}, Invalid("admin_id", "IDを確認してください。")
+		return Invalid("login_id", "IDを確認してください。")
 	}
-	if !utf8.ValidString(password) || len(password) < 1 || len(password) > 72 {
-		return LoginResult{}, Invalid("password", "パスワードは1〜72バイトで指定してください。")
+	if !utf8.ValidString(password) || len(password) < 8 || len(password) > 72 {
+		return Invalid("password", "パスワードは8〜72バイトで指定してください。")
 	}
-	matched := s.Passwords.Matches(s.PasswordHash, password)
-	if id != s.AdminID || !matched {
-		return LoginResult{}, ErrInvalidCredentials
-	}
+	return nil
+}
+func (s Auth) newSession(id string) (LoginResult, error) {
 	token, err := s.Tokens.Generate()
 	if err != nil {
 		return LoginResult{}, err
@@ -45,15 +47,37 @@ func (s Auth) Login(ctx context.Context, id, password, oldToken string) (LoginRe
 		return LoginResult{}, err
 	}
 	now := s.Clock.Now()
-	session := domain.Session{TokenHash: s.Tokens.Hash(token), CSRFTokenHash: s.Tokens.Hash(csrf), CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}
+	session := domain.Session{LoginID: id, TokenHash: s.Tokens.Hash(token), CSRFTokenHash: s.Tokens.Hash(csrf), CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}
+	return LoginResult{Authenticated: Authenticated{LoginID: id, CSRFToken: csrf, Session: session}, Token: token}, nil
+}
+func (s Auth) Login(ctx context.Context, id, password, oldToken string) (LoginResult, error) {
+	if err := validateCredentials(id, password); err != nil {
+		return LoginResult{}, err
+	}
+	user, err := s.Users.FindUser(ctx, id)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return LoginResult{}, err
+	}
+	hash := user.PasswordHash
+	if errors.Is(err, ErrNotFound) {
+		hash = dummyPasswordHash
+	}
+	matched := s.Passwords.Matches(hash, password)
+	if err != nil || !matched {
+		return LoginResult{}, ErrInvalidCredentials
+	}
+	result, err := s.newSession(id)
+	if err != nil {
+		return LoginResult{}, err
+	}
 	oldHash := ""
 	if oldToken != "" {
 		oldHash = s.Tokens.Hash(oldToken)
 	}
-	if err := s.Repository.ReplaceSession(ctx, oldHash, session); err != nil {
+	if err := s.Repository.ReplaceSession(ctx, oldHash, result.Session); err != nil {
 		return LoginResult{}, err
 	}
-	return LoginResult{Authenticated: Authenticated{AdminID: s.AdminID, CSRFToken: csrf, Session: session}, Token: token}, nil
+	return result, nil
 }
 func (s Auth) Authenticate(ctx context.Context, token, csrf string) (Authenticated, error) {
 	if token == "" || csrf == "" {
@@ -69,7 +93,12 @@ func (s Auth) Authenticate(ctx context.Context, token, csrf string) (Authenticat
 	if !session.ValidAt(s.Clock.Now()) || !s.Tokens.EqualHash(csrf, session.CSRFTokenHash) {
 		return Authenticated{}, ErrUnauthenticated
 	}
-	return Authenticated{AdminID: s.AdminID, CSRFToken: csrf, Session: session}, nil
+	if _, err = s.Users.FindUser(ctx, session.LoginID); errors.Is(err, ErrNotFound) {
+		return Authenticated{}, ErrUnauthenticated
+	} else if err != nil {
+		return Authenticated{}, err
+	}
+	return Authenticated{LoginID: session.LoginID, CSRFToken: csrf, Session: session}, nil
 }
 func (s Auth) CheckCSRF(auth Authenticated, token string) bool {
 	return token != "" && s.Tokens.EqualHash(token, auth.Session.CSRFTokenHash)

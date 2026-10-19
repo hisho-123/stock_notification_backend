@@ -9,13 +9,16 @@ import (
 )
 
 type Monitor struct {
-	Assets      AssetRepository
-	Settings    SettingsRepository
-	Sessions    SessionRepository
-	Transaction Transaction
-	Prices      PriceProvider
-	Notifier    Notifier
-	Clock       Clock
+	Assets        AssetRepository
+	Snapshots     SnapshotRepository
+	Users         UserRepository
+	Registrations RegistrationRepository
+	Settings      SettingsRepository
+	Sessions      SessionRepository
+	Transaction   Transaction
+	Prices        PriceProvider
+	Notifier      Notifier
+	Clock         Clock
 }
 type MonitorResult struct{ Processed, Skipped, Failed, Stale int }
 
@@ -31,17 +34,31 @@ func (s Monitor) Run(ctx context.Context, report func(Observation)) (MonitorResu
 	if err := s.Sessions.DeleteExpiredSessions(ctx, s.Clock.Now()); err != nil {
 		return result, err
 	}
-	settings, err := s.Settings.GetSettings(ctx)
+	if s.Registrations != nil {
+		if err := s.Registrations.DeleteExpiredRegistrationTokens(ctx, s.Clock.Now()); err != nil {
+			return result, err
+		}
+	}
+	snapshot, err := s.Snapshots.MonitoringSnapshot(ctx)
 	if err != nil {
 		return result, err
 	}
-	thresholds := append([]int(nil), settings.Thresholds...)
-	targets, err := s.Assets.Targets(ctx)
-	if err != nil {
-		return result, err
+	result.Failed += len(snapshot.MissingSettings)
+	for range snapshot.MissingSettings {
+		if report != nil {
+			report(Observation{Result: "failed", ErrorCode: "SETTINGS_MISSING"})
+		}
 	}
+	targets := snapshot.Targets
 	sort.Slice(targets, func(i, j int) bool { return targets[i].ID < targets[j].ID })
 	for _, target := range targets {
+		settings, ok := snapshot.Settings[target.LoginID]
+		if !ok {
+			result.Skipped++
+			continue
+		}
+		thresholds := append([]int(nil), settings.Thresholds...)
+		ownerCtx := WithLoginID(ctx, target.LoginID)
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
@@ -52,8 +69,8 @@ func (s Monitor) Run(ctx context.Context, report func(Observation)) (MonitorResu
 		}
 		obs := Observation{AssetID: target.ID, Result: "success"}
 		stale := false
-		err := s.Transaction.WithinTransaction(ctx, func(repo AssetRepository) error {
-			a, err := repo.Get(ctx, target.ID)
+		err := s.Transaction.WithinTransaction(ownerCtx, func(repo AssetRepository) error {
+			a, err := repo.Get(ownerCtx, target.ID)
 			if errors.Is(err, ErrNotFound) {
 				obs.Result = "skipped"
 				return nil
@@ -72,12 +89,20 @@ func (s Monitor) Run(ctx context.Context, report func(Observation)) (MonitorResu
 				a.LastErrorCode = &e
 				obs.Result, obs.ErrorCode = "failed", string(e)
 				a.UpdatedAt = s.Clock.Now()
-				return repo.SaveObservation(ctx, a)
+				return repo.SaveObservation(ownerCtx, a)
 			}
 			a.LastCheckedAt = q.FetchedAt
 			if q.Stale() {
 				stale = true
-				if err := s.Notifier.Send(ctx, domain.StaleMessage(a, q)); err != nil {
+				owner, err := s.Users.FindUser(ctx, target.LoginID)
+				if err != nil {
+					return err
+				}
+				if !owner.LINEFollowing {
+					e := domain.PriceDataStale
+					a.LastErrorCode = &e
+					obs.Result, obs.ErrorCode = "stale", string(e)
+				} else if err := s.Notifier.Send(ctx, owner.LINEUserID, domain.StaleMessage(a, q)); err != nil {
 					e := domain.NotificationFailed
 					a.LastErrorCode = &e
 					obs.Result, obs.ErrorCode = "failed", string(e)
@@ -91,7 +116,13 @@ func (s Monitor) Run(ctx context.Context, report func(Observation)) (MonitorResu
 				threshold := a.ApplyFreshPrice(q, thresholds)
 				a.LastErrorCode = nil
 				if threshold > 0 {
-					if err := s.Notifier.Send(ctx, domain.DeclineMessage(a, threshold)); err != nil {
+					owner, err := s.Users.FindUser(ctx, target.LoginID)
+					if err != nil {
+						return err
+					}
+					if !owner.LINEFollowing {
+						// 送信抑止を通知成功とせず、通知済み率を維持する。
+					} else if err := s.Notifier.Send(ctx, owner.LINEUserID, domain.DeclineMessage(a, threshold)); err != nil {
 						e := domain.NotificationFailed
 						a.LastErrorCode = &e
 						obs.Result, obs.ErrorCode = "failed", string(e)
@@ -101,7 +132,7 @@ func (s Monitor) Run(ctx context.Context, report func(Observation)) (MonitorResu
 				}
 			}
 			a.UpdatedAt = s.Clock.Now()
-			return repo.SaveObservation(ctx, a)
+			return repo.SaveObservation(ownerCtx, a)
 		})
 		if stale {
 			result.Stale++

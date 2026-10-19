@@ -31,7 +31,7 @@ type notifier struct {
 	err      error
 }
 
-func (n *notifier) Send(_ context.Context, message string) error {
+func (n *notifier) Send(_ context.Context, _ string, message string) error {
 	n.messages = append(n.messages, message)
 	return n.err
 }
@@ -129,7 +129,7 @@ func setup(now time.Time) (*memory, *provider, *notifier, usecase.Monitor) {
 		return domain.Quote{Price: p("75"), ProvidedAt: now, FetchedAt: now}, nil
 	}}
 	n := &notifier{}
-	return m, prices, n, usecase.Monitor{Assets: m, Settings: m, Sessions: m, Transaction: m, Prices: prices, Notifier: n, Clock: &clock{now}}
+	return m, prices, n, usecase.Monitor{Assets: m, Snapshots: m, Users: m, Settings: m, Sessions: m, Transaction: m, Prices: prices, Notifier: n, Clock: &clock{now}}
 }
 func TestMonitorStateTransitions(t *testing.T) {
 	now := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
@@ -445,4 +445,16 @@ func TestMonitorDeterministicTargetOrder(t *testing.T) {
 	if err != nil || got.Processed != 3 || !reflect.DeepEqual(ids, []int64{1, 2, 3}) || !reflect.DeepEqual(prices.calls, []string{"AAPL", "SECOND", "THIRD"}) || len(n.messages) != 0 {
 		t.Fatal(got, err, ids, prices.calls)
 	}
+}
+
+func (m *memory) MonitoringSnapshot(ctx context.Context) (usecase.MonitoringSnapshot, error) {
+	settings, err := m.GetSettings(ctx)
+	if err != nil {
+		return usecase.MonitoringSnapshot{}, err
+	}
+	targets, err := m.Targets(ctx)
+	return usecase.MonitoringSnapshot{Targets: targets, Settings: map[string]domain.NotificationSettings{"": {Thresholds: append([]int(nil), settings.Thresholds...), UpdatedAt: settings.UpdatedAt}}}, err
+}
+func (m *memory) FindUser(context.Context, string) (domain.User, error) {
+	return domain.User{LINEFollowing: true, LINEUserID: "U00000000000000000000000000000001"}, nil
 }

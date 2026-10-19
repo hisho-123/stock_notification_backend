@@ -14,9 +14,9 @@ DATABASE_URL='postgres://stock:stock@db:5432/stock?sslmode=disable'
 
 `.env.example`の接続先はホスト実行用なので、Composeでアプリを起動する前に変更する。外部DBを使う場合は、そのDBの接続先・認証情報・TLS設定を`DATABASE_URL`へ指定する。ホスト実行へ切り替える際は、接続先も戻す。
 
-1. ルートの`.env.example`を`.env`へコピーし、秘密情報とcost 12以上のbcryptハッシュを設定する。`.env`は権限600にし、Gitへ追加しない。`htpasswd -nBC 12 owner`は対話入力でハッシュを生成できる。出力の`owner:`を除いたハッシュをシングルクォートで囲む。
+1. ルートの`.env.example`を`.env`へコピーし、DB・FMP・LINE_TOKEN・LINE_CHANNEL_SECRET・PUBLIC_ORIGINを設定する。`.env`は権限600にし、Gitへ追加しない。固定の管理者・通知先は設定しない。monitorにはDB・FMP・LINE_TOKENが必要。
 2. `make db-up`でローカルPostgreSQLを起動する。
-3. 初回のみ次のコマンドでスキーマを作成する。適用済みDBでは再実行しない。
+3. 初回のみ次のコマンドで空の6テーブルを作成する。旧スキーマ・旧データの移行は提供しない。既存の開発DBを残して新しい専用DBを用意し、接続先を切り替える。適用済みDBでは再実行しない。
 
 ```sh
 docker compose -f deploy/compose.yaml exec -T db \
@@ -38,7 +38,7 @@ docker compose -f deploy/compose.yaml --profile tools run --rm monitor
 
 監視終了0は全成功、1は設定不備・DB障害・対象失敗・古いデータ検知。停滞通知成功による自動停止も1になる。実行ID・対象ID・結果・終了時刻をJSONログへ記録する。スケジューラ側で失敗と未実行を検知する。
 
-監視を重複起動しない。停止・再開・削除・手動実行の前に監視コマンドの終了を確認する。アプリに排他ロックはなく、競合時の整合性を保証しない。通知の即時再送や送信待ちキューはなく、翌日の価格から再判定する。LINE受付後のDB保存失敗では重複通知が起こり得る。
+監視を重複起動しない。停止・再開・削除・手動実行の前に監視コマンドの終了を確認する。日次処理には排他ロックを設けず、監視中の操作との競合時の整合性を保証しない。登録・再発行・ブロック更新だけはLINEユーザー単位の短いDBトランザクションで直列化する。通知の即時再送や送信待ちキューはなく、翌日の価格から再判定する。LINE受付後のDB保存失敗では重複通知が起こり得る。
 
 `TRUSTED_PROXY_CIDRS`は実際に信頼するプロキシの接続元だけを指定する。未指定時はソケットの接続元をログイン試行制限に使用する。設定した場合も、転送チェーンを右から確認して最初の信頼しないIPを採用する。
 
@@ -50,11 +50,29 @@ docker compose -f deploy/compose.yaml --profile tools run --rm monitor
 pg_dump --dbname="$DATABASE_URL" --format=custom --file=stock.dump
 ```
 
-復元時はWebとスケジューラを停止する。空の専用DBへ復元後、全セッションを削除してから再起動する。
+復元時はWebとスケジューラを停止する。空の専用DBへ復元後、全セッションを削除し、未使用登録URLをすべて失効してから再起動する。
 
 ```sh
 pg_restore --dbname="$DATABASE_URL" stock.dump
-psql --dbname="$DATABASE_URL" -v ON_ERROR_STOP=1 -c 'DELETE FROM sessions'
+psql --dbname="$DATABASE_URL" -v ON_ERROR_STOP=1 -c "BEGIN; DELETE FROM sessions; UPDATE registration_tokens SET revoked_at=clock_timestamp() WHERE consumed_at IS NULL AND revoked_at IS NULL; COMMIT;"
 ```
 
-復元では通知済み状態もバックアップ時点へ戻るため、重複通知が起こり得る。バックアップファイルは管理データを含むのでアクセス権を制限する。管理者設定変更時も全セッションを削除してWebを再起動する。
+復元では通知済み状態・友だち状態もバックアップ時点へ戻るため、重複通知や実際のブロック状態との差が起こり得る。バックアップはパスワードハッシュ・LINEユーザーIDを含むのでアクセス権を制限する。
+
+## LINE Webhook・登録の運用
+
+LINE Developers Consoleに`PUBLIC_ORIGIN/api/v1/webhooks/line`を設定し、Webhookと再配信を有効化する。リバースプロキシはこのPOSTをCookie・Origin・CSRF検査へ入れず、アプリのHMAC-SHA256署名検証へ通す。署名付き空イベント、follow、unfollow、「登録」を確認する。公式アカウントの案内には「URLが届かない／期限切れの場合は『登録』と送信」を記載する。定型あいさつ・自動応答による二重案内を調整する。
+
+イベントIDで重複を排除し、友だち状態とURL発行を別々のイベント時刻で判定する。コミット後にReply APIを1回だけ呼び、失敗・成否不明でも再返信しない。Webhookは200を返すため、`line_reply`ログと次の履歴を確認する。pending残存・failedは通知し、利用者には「登録」の再送を案内する。永続的な返信キューは設けない。
+
+```sql
+SELECT webhook_event_id,reply_status,processed_at
+FROM line_webhook_events
+WHERE reply_status IN ('pending','failed') ORDER BY processed_at;
+```
+
+登録・登録確認はIP別15分30要求、ログインはIP別15分5失敗、LINEの再発行コマンドはLINE別15分5回まで。Webは1プロセスを前提にする。`TRUSTED_PROXY_CIDRS`を誤って広く指定しない。
+
+ブロック中もWebログイン・編集・価格監視を維持し、LINE送信を抑止する。停滞時はPRICE_DATA_STALEを保存して監視を継続する。ユーザーの通知設定が欠落した場合は既定値へ戻さず、そのユーザーを失敗として他ユーザーを処理する。設定・監視対象は実行開始時の同一スナップショットを使用し、友だち状態は送信直前に読み直す。
+
+期限切れセッションと期限切れ・消費済み・失効済みの登録トークンをWeb起動時と日次監視開始時に削除する。Webhook履歴は重複・順序判定に必要なため自動削除しない。リクエスト本文・Cookie・パスワード・LINEユーザーID・登録URL・replyTokenをアクセスログや解析タグへ残さない。登録画面はno-store・no-referrerで配信する。

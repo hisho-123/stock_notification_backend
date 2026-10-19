@@ -58,13 +58,13 @@ func (p *passwordCheck) Matches(_, _ string) bool { p.calls++; return p.matches 
 func authFixture() (usecase.Auth, *sessionRepo, *tokenSource, *passwordCheck) {
 	now := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
 	r, tokens, passwords := &sessionRepo{}, &tokenSource{}, &passwordCheck{matches: true}
-	return usecase.Auth{Repository: r, Tokens: tokens, Passwords: passwords, Clock: &clock{now}, AdminID: "owner", PasswordHash: "hash"}, r, tokens, passwords
+	return usecase.Auth{Repository: r, Tokens: tokens, Passwords: passwords, Clock: &clock{now}, Users: authUsers{}}, r, tokens, passwords
 }
 
 func TestLoginValidationAndFailures(t *testing.T) {
 	for _, tc := range []struct{ name, id, password, field string }{
-		{"empty ID", "", "correct", "admin_id"}, {"invalid ID UTF8", "\xff", "correct", "admin_id"},
-		{"long ID", strings.Repeat("界", 101), "correct", "admin_id"},
+		{"empty ID", "", "correct-password", "login_id"}, {"invalid ID UTF8", "\xff", "correct-password", "login_id"},
+		{"long ID", strings.Repeat("界", 101), "correct-password", "login_id"},
 		{"empty password", "owner", "", "password"}, {"invalid password UTF8", "owner", "\xff", "password"},
 		{"long password", "owner", strings.Repeat("a", 73), "password"},
 	} {
@@ -101,7 +101,7 @@ func TestLoginValidationAndFailures(t *testing.T) {
 			if tc.saveFailure {
 				r.err = want
 			}
-			_, err := a.Login(context.Background(), id, "correct", "")
+			_, err := a.Login(context.Background(), id, "correct-password", "")
 			if !errors.Is(err, want) || passwords.calls != 1 {
 				t.Fatalf("err=%v password checks=%d", err, passwords.calls)
 			}
@@ -116,12 +116,12 @@ func TestLoginPersistsHashesAndReplacesSession(t *testing.T) {
 	for _, old := range []string{"", "old-secret"} {
 		t.Run("old="+old, func(t *testing.T) {
 			a, r, tokens, _ := authFixture()
-			got, err := a.Login(context.Background(), "owner", "correct", old)
+			got, err := a.Login(context.Background(), "owner", "correct-password", old)
 			wantOld := ""
 			if old != "" {
 				wantOld = tokens.Hash(old)
 			}
-			if err != nil || tokens.calls != 2 || r.replacements != 1 || r.old != wantOld || got.Token != "session-secret" || got.CSRFToken != "csrf-secret" || got.AdminID != "owner" || r.row.TokenHash != tokens.Hash(got.Token) || r.row.CSRFTokenHash != tokens.Hash(got.CSRFToken) || !r.row.CreatedAt.Equal(a.Clock.Now()) || !r.row.ExpiresAt.Equal(a.Clock.Now().Add(24*time.Hour)) {
+			if err != nil || tokens.calls != 2 || r.replacements != 1 || r.old != wantOld || got.Token != "session-secret" || got.CSRFToken != "csrf-secret" || got.LoginID != "owner" || r.row.TokenHash != tokens.Hash(got.Token) || r.row.CSRFTokenHash != tokens.Hash(got.CSRFToken) || !r.row.CreatedAt.Equal(a.Clock.Now()) || !r.row.ExpiresAt.Equal(a.Clock.Now().Add(24*time.Hour)) {
 				t.Fatalf("result=%+v row=%+v old=%s err=%v", got, r.row, r.old, err)
 			}
 		})
@@ -141,7 +141,7 @@ func TestAuthenticationAndLogout(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			a, r, tokens, _ := authFixture()
 			r.err = tc.repoErr
-			r.row = domain.Session{TokenHash: tokens.Hash(tc.token), CSRFTokenHash: tokens.Hash(tc.csrf), ExpiresAt: a.Clock.Now().Add(time.Hour)}
+			r.row = domain.Session{LoginID: "owner", TokenHash: tokens.Hash(tc.token), CSRFTokenHash: tokens.Hash(tc.csrf), ExpiresAt: a.Clock.Now().Add(time.Hour)}
 			if tc.expired {
 				r.row.ExpiresAt = a.Clock.Now()
 			}
@@ -160,7 +160,7 @@ func TestAuthenticationAndLogout(t *testing.T) {
 				t.Fatalf("got %v want %v", err, want)
 			}
 			if want == nil {
-				if got.AdminID != "owner" || got.CSRFToken != tc.csrf || got.Session != r.row || !a.CheckCSRF(got, tc.csrf) || a.CheckCSRF(got, "") || a.CheckCSRF(got, "other") {
+				if got.LoginID != "owner" || got.CSRFToken != tc.csrf || got.Session != r.row || !a.CheckCSRF(got, tc.csrf) || a.CheckCSRF(got, "") || a.CheckCSRF(got, "other") {
 					t.Fatal("invalid authentication", got)
 				}
 				for _, failure := range []error{nil, usecase.ErrUnavailable} {
@@ -179,4 +179,13 @@ func TestAuthenticationAndLogout(t *testing.T) {
 			}
 		})
 	}
+}
+
+type authUsers struct{}
+
+func (authUsers) FindUser(_ context.Context, id string) (domain.User, error) {
+	if id != "owner" {
+		return domain.User{}, usecase.ErrNotFound
+	}
+	return domain.User{LoginID: id, PasswordHash: "hash", LINEUserID: "U00000000000000000000000000000001", LINEFollowing: true}, nil
 }

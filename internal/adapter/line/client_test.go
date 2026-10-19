@@ -25,9 +25,9 @@ func TestPushReceiptAndNoRetry(t *testing.T) {
 			}
 			w.WriteHeader(status)
 		}))
-		client := New("secret", "user", server.Client())
+		client := New("secret", server.Client())
 		client.Endpoint = server.URL
-		err := client.Send(context.Background(), "通知")
+		err := client.Send(context.Background(), "user", "通知")
 		server.Close()
 		if (err == nil) != (status == 200) || calls != 1 {
 			t.Fatal(status, err, calls)

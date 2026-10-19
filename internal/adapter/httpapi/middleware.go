@@ -29,12 +29,17 @@ func (s *Server) guard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/v1/webhooks/line" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		modifies := r.Method == "POST" || r.Method == "PATCH" || r.Method == "PUT" || r.Method == "DELETE"
 		if modifies && (len(r.Header.Values("Origin")) != 1 || r.Header.Get("Origin") != s.PublicOrigin) {
 			writeError(w, usecase.ErrCSRF)
 			return
 		}
-		if r.URL.Path != "/api/v1/auth/login" || r.Method != http.MethodPost {
+		public := r.Method == http.MethodPost && (r.URL.Path == "/api/v1/auth/login" || r.URL.Path == "/api/v1/auth/register" || r.URL.Path == "/api/v1/auth/registration/validate")
+		if !public {
 			auth, err := s.Auth.Authenticate(r.Context(), cookieValue(r, sessionCookie), cookieValue(r, csrfCookie))
 			if err != nil {
 				writeError(w, err)
@@ -44,7 +49,7 @@ func (s *Server) guard(next http.Handler) http.Handler {
 				writeError(w, usecase.ErrCSRF)
 				return
 			}
-			r = r.WithContext(context.WithValue(r.Context(), authKey{}, auth))
+			r = r.WithContext(usecase.WithLoginID(context.WithValue(r.Context(), authKey{}, auth), auth.LoginID))
 		}
 		query, err := url.ParseQuery(r.URL.RawQuery)
 		if err != nil {
@@ -103,6 +108,9 @@ func (w responseWriter) WriteHeader(status int) {
 func responseHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
+		if r.URL.Path == "/register" || r.URL.Path == "/register/" {
+			w.Header().Set("Referrer-Policy", "no-referrer")
+		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		next.ServeHTTP(responseWriter{w}, r)
 	})
@@ -147,6 +155,7 @@ func (s *Server) clientIP(r *http.Request) string {
 type attemptLimiter struct {
 	mu       sync.Mutex
 	failures map[string][]time.Time
+	limit    int
 }
 
 func (l *attemptLimiter) prune(now time.Time) {
@@ -168,7 +177,11 @@ func (l *attemptLimiter) retryAfter(ip string, now time.Time) int {
 	defer l.mu.Unlock()
 	l.prune(now)
 	failures := l.failures[ip]
-	if len(failures) < 5 {
+	limit := l.limit
+	if limit == 0 {
+		limit = 5
+	}
+	if len(failures) < limit {
 		return 0
 	}
 	return int(math.Ceil(failures[0].Add(15 * time.Minute).Sub(now).Seconds()))
@@ -180,3 +193,20 @@ func (l *attemptLimiter) failed(ip string, now time.Time) {
 	l.failures[ip] = append(l.failures[ip], now)
 }
 func (l *attemptLimiter) clear(ip string) { l.mu.Lock(); defer l.mu.Unlock(); delete(l.failures, ip) }
+
+// 確認と加算を同じロック内で行い、並列の登録・確認要求にも合算30件の上限を守る。
+func (l *attemptLimiter) consume(ip string, now time.Time) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.prune(now)
+	failures := l.failures[ip]
+	limit := l.limit
+	if limit == 0 {
+		limit = 5
+	}
+	if len(failures) >= limit {
+		return int(math.Ceil(failures[0].Add(15 * time.Minute).Sub(now).Seconds()))
+	}
+	l.failures[ip] = append(failures, now)
+	return 0
+}

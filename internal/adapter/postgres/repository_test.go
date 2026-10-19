@@ -112,7 +112,7 @@ func (b beginStub) Begin(context.Context) (pgx.Tx, error) { return b.tx, b.err }
 
 func assetValues(id int64, latest string) []any {
 	now := time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC)
-	return []any{id, "AAPL", "Apple", "100", latest, now, true, nil, now, nil, now, now}
+	return []any{id, "owner", "AAPL", "Apple", "100", latest, now, true, nil, now, nil, now, now}
 }
 
 func TestDatabaseErrorMapping(t *testing.T) {
@@ -165,7 +165,7 @@ func TestOpeningInvalidOrUnavailableDatabase(t *testing.T) {
 }
 
 func TestAssetScanningFailures(t *testing.T) {
-	for _, index := range []int{3, 4} {
+	for _, index := range []int{4, 5} {
 		values := assetValues(1, "90")
 		values[index] = "invalid"
 		if _, err := scanAsset(rowStub{values: values}); !errors.Is(err, domain.ErrInvalidPrice) {
@@ -174,7 +174,7 @@ func TestAssetScanningFailures(t *testing.T) {
 	}
 	values := assetValues(1, "90")
 	code := "PRICE_FETCH_FAILED"
-	values[9] = &code
+	values[10] = &code
 	got, err := scanAsset(rowStub{values: values})
 	if err != nil || got.LastErrorCode == nil || *got.LastErrorCode != domain.PriceFetchFailed {
 		t.Fatal(got, err)
@@ -236,9 +236,9 @@ func TestDeclineSortingTiesAndDirections(t *testing.T) {
 			}
 		})
 	}
-	rows := &rowsStub{values: [][]any{{int64(42), "AAPL"}}}
+	rows := &rowsStub{values: [][]any{{int64(42), "AAPL", "owner"}}}
 	got, err := (&Store{q: &queryStub{rows: rows}}).Targets(context.Background())
-	if err != nil || !reflect.DeepEqual(got, []usecase.Target{{ID: 42, Code: "AAPL"}}) {
+	if err != nil || !reflect.DeepEqual(got, []usecase.Target{{ID: 42, Code: "AAPL", LoginID: "owner"}}) {
 		t.Fatal(got, err)
 	}
 }

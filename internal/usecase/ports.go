@@ -9,16 +9,19 @@ import (
 )
 
 var (
-	ErrNotFound           = errors.New("not found")
-	ErrAlreadyExists      = errors.New("already exists")
-	ErrUnavailable        = errors.New("service unavailable")
-	ErrConnectionLost     = errors.New("database connection lost")
-	ErrSymbolUnavailable  = errors.New("symbol unavailable")
-	ErrPriceProvider      = errors.New("price provider error")
-	ErrPriceTimeout       = errors.New("price provider timeout")
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrUnauthenticated    = errors.New("unauthenticated")
-	ErrCSRF               = errors.New("csrf failed")
+	ErrNotFound                = errors.New("not found")
+	ErrAlreadyExists           = errors.New("already exists")
+	ErrUnavailable             = errors.New("service unavailable")
+	ErrConnectionLost          = errors.New("database connection lost")
+	ErrSymbolUnavailable       = errors.New("symbol unavailable")
+	ErrPriceProvider           = errors.New("price provider error")
+	ErrPriceTimeout            = errors.New("price provider timeout")
+	ErrInvalidCredentials      = errors.New("invalid credentials")
+	ErrUnauthenticated         = errors.New("unauthenticated")
+	ErrCSRF                    = errors.New("csrf failed")
+	ErrRegistrationUnavailable = errors.New("registration link unavailable")
+	ErrLoginIDExists           = errors.New("login id already exists")
+	ErrInvalidLINESignature    = errors.New("invalid LINE signature")
 )
 
 type ValidationError struct{ Fields map[string]string }
@@ -30,8 +33,9 @@ func Invalid(field, message string) error {
 
 type ListOptions struct{ Query, Sort, Order string }
 type Target struct {
-	ID   int64
-	Code string
+	ID      int64
+	Code    string
+	LoginID string
 }
 
 type AssetRepository interface {
@@ -61,7 +65,7 @@ type PriceProvider interface {
 	Fetch(context.Context, string) (domain.Quote, error)
 }
 type Notifier interface {
-	Send(context.Context, string) error
+	Send(context.Context, string, string) error
 }
 type Clock interface{ Now() time.Time }
 type PasswordVerifier interface{ Matches(string, string) bool }

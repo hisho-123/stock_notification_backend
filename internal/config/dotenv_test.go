@@ -72,7 +72,7 @@ func TestLoadDotEnvFallbacksAndEmptyValues(t *testing.T) {
 					}
 					continue
 				}
-				if err != nil || got.FMPAPIKey != tc.wantKey || got.DatabaseURL != "secret-db-url" || got.LINEToken != "secret-token" || got.AdminID != "owner" {
+				if err != nil || got.FMPAPIKey != tc.wantKey || got.DatabaseURL != "secret-db-url" || got.LINEToken != "secret-token" || got.LINEChannelSecret != "owner" {
 					t.Fatal(command, got, err)
 				}
 				if command == "serve" {

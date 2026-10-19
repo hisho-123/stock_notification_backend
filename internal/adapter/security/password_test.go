@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/hisho-123/stock_notification_backend/internal/testfixture"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestValidPasswordHash(t *testing.T) {
@@ -59,7 +60,7 @@ func TestPasswordMatching(t *testing.T) {
 		name, hash, password string
 		want                 bool
 	}{
-		{"correct", testfixture.PasswordHash, testfixture.Password, true},
+		{"correct-password", testfixture.PasswordHash, testfixture.Password, true},
 		{"incorrect", testfixture.PasswordHash, "wrong", false},
 		{"invalid hash", "invalid", testfixture.Password, false},
 	} {
@@ -68,5 +69,16 @@ func TestPasswordMatching(t *testing.T) {
 				t.Fatal(got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPasswordHashCostAndExactInput(t *testing.T) {
+	hash, err := (Passwords{}).Hash(" password ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cost, err := bcrypt.Cost([]byte(hash))
+	if err != nil || cost < 12 || !(Passwords{}).Matches(hash, " password ") || (Passwords{}).Matches(hash, "password") {
+		t.Fatal(cost, err)
 	}
 }

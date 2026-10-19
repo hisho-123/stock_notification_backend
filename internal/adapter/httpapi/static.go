@@ -27,7 +27,7 @@ func staticHandler(dir string) http.Handler {
 			return
 		}
 		// Only application routes fall back to the SPA, not missing JS/CSS assets.
-		if cleaned == "/" || cleaned == "/login" || cleaned == "/assets" || cleaned == "/settings" || cleaned == "/settings/notifications" {
+		if cleaned == "/" || cleaned == "/login" || cleaned == "/register" || cleaned == "/assets" || cleaned == "/settings" || cleaned == "/settings/notifications" {
 			index := filepath.Join(dir, "index.html")
 			if info, err := os.Stat(index); err == nil && info.Mode().IsRegular() {
 				http.ServeFile(w, r, index)

@@ -1,8 +1,8 @@
 # 株・指数の下落通知バックエンド
 
-Goによる単一管理者向けAPI・日次監視コマンド。PostgreSQLに監視対象・通知設定・セッションを保存し、FMPの価格から下落率を判定してLINEへ通知する。
+Goによる複数ユーザー向けAPI・日次監視コマンド。LINEから専用登録URLを発行し、PostgreSQLにユーザー・本人の監視対象・通知設定・セッションを保存する。FMPの価格から下落率を判定し、所有者のLINEへ通知する。
 
-仕様の正本は隣接する`../stock_notification_docs`リポジトリの`api/openapi.yaml`と`design/`。APIは`/api/v1`配下の9操作を実装する。フロントエンドは別リポジトリで管理する。
+仕様の正本は隣接する`../stock_notification_docs`リポジトリの`api/openapi.yaml`と`design/`。APIは`/api/v1`配下の12操作を実装する。フロントエンドは別リポジトリで管理する。
 
 ## 構成
 
@@ -14,7 +14,7 @@ Goによる単一管理者向けAPI・日次監視コマンド。PostgreSQLに�
 | `internal/adapter` | HTTP・PostgreSQL・FMP・LINE・認証用暗号処理 |
 | `internal/bootstrap` | 設定・接続・依存注入・起動と終了 |
 | `internal/config` | `.env`・環境変数の読み込みとコマンド別の設定検証 |
-| `migrations` | テーブル・制約・初期設定。起動時には適用しない |
+| `migrations` | 空の6テーブル・制約。起動時には適用しない |
 | `tests/integration` | 専用PostgreSQLと模擬FMP/LINEを使う結合テスト |
 
 domainは外部サービスに依存せず、usecaseはdomainと標準ライブラリだけを利用する。adapterがusecaseのinterfaceを実装し、bootstrapで具体実装を注入する。HTTP要求・応答と業務モデルは分離する。
@@ -46,15 +46,11 @@ HomebrewのComposeは単独の`docker-compose`コマンドで利用できる。�
 ```sh
 cp -n .env.example .env
 chmod 600 .env
-# 対話入力で管理者パスワードのbcryptハッシュを作成する
-htpasswd -nBC 12 owner
 ```
 
-出力の`owner:`を除いたハッシュを、`.env`の`ADMIN_PASSWORD_HASH`へシングルクォートで囲んで設定する。ハッシュ中の`$`をシェルに展開させないこと。`ADMIN_ID='owner'`とし、`PUBLIC_ORIGIN='https://localhost'`へ変更する。DB接続先と`HTTP_ADDR='127.0.0.1:8080'`はサンプルのままでよい。
+`PUBLIC_ORIGIN='https://localhost'`、`DATABASE_URL`、`FMP_API_KEY`、`LINE_TOKEN`、`LINE_CHANNEL_SECRET`を設定する。Webにはすべて、`monitor`にはDB・FMP・LINE_TOKENが必須。LINEのトークンとシークレットは同じ公式アカウントのチャネルを使う。ユーザーのID・パスワードは登録画面で設定し、固定の管理者情報・固定の通知先は設定しない。
 
-このPCの初回構築では管理者パスワードを自動生成し、Git管理対象外の`bin/local-admin-password`（権限600）へ保存した。必要時にローカルで確認できる。再構築する場合は上記の対話入力で自分のパスワードを設定してよい。
-
-FMP・LINEの値はローカルの起動・認証確認では仮値のままでよい。銘柄登録など価格取得を伴う操作には有効な`FMP_API_KEY`が必要。`monitor`にはさらに有効な`LINE_TOKEN`・`LINE_USER_ID`が必要で、実際の通知が送信され得るため、この確認では実行しない。
+外部サービスを使わない検証には後述の結合テストを使う。実際の銘柄登録には有効なFMPキー、登録URLの返信と日次通知には有効なLINE設定が必要。
 
 `serve`・`monitor`は起動時の作業ディレクトリにある`.env`を自動で読み込む。リポジトリのルートで起動すれば、シェルでの手動読み込みは不要。同じ項目がある場合は環境変数より`.env`を優先し、明示された空値もそのまま使う。`.env`や項目がない場合は環境変数を使用する。必須項目が空の場合や、`.env`の読み込み・解析に失敗した場合は起動エラーになる。
 
@@ -67,14 +63,16 @@ docker-compose -f deploy/compose.yaml ps
 docker-compose -f deploy/compose.yaml exec -T db pg_isready -U stock -d stock
 ```
 
-初回のみスキーマを作成する。適用済みのDBには再実行しない。起動時の自動マイグレーションはない。
+初回のみ空の6テーブルを作成する。初期ユーザー・全体通知設定は作成しない。旧3テーブルとの互換・データ移行は提供しないため、新しい専用の開発DBを用意して接続先を切り替える。既存DBへこのDDLを重ねて実行しない。起動時の自動マイグレーションはない。
 
 ```sh
+# stock_multiuser が未作成の場合だけ作成する。既存DBは削除しない。
+docker-compose -f deploy/compose.yaml exec -T db createdb -U stock stock_multiuser
 docker-compose -f deploy/compose.yaml exec -T db \
-  psql -U stock -d stock -v ON_ERROR_STOP=1 -f /migrations/000001_initial.up.sql
+  psql -U stock -d stock_multiuser -v ON_ERROR_STOP=1 -f /migrations/000001_initial.up.sql
 ```
 
-`make migrate`はホストの`psql`を使うため、この構成では上記のコンテナ内コマンドを使用する。
+作成後、`.env`の`DATABASE_URL`のDB名を`stock_multiuser`へ変更する。`make migrate`はホストの`psql`と`DATABASE_URL`を使うため、この構成では上記のコンテナ内コマンドを使用する。
 
 ### 4. ビルド・API起動
 
@@ -85,35 +83,15 @@ make build
 
 `web_started`ログが表示されれば起動完了。停止はCtrl+C。別ターミナルで次の動作確認を行う。APIだけならフロントエンドの成果物は不要で、画面URLの404は正常。画面を配信する場合は別リポジトリのReact成果物を`web/dist/`へ配置する。
 
-### 5. curlでログイン・設定取得を確認する
+### 5. LINEから登録・ログインを確認する
 
-以下はzsh/bashで実行する。Originには手順2で設定した`https://localhost`を指定する。`PUBLIC_ORIGIN`を別の値にした場合は、curlのOriginも同じ値へ変更する。パスワードをコマンド履歴へ残さないよう対話入力し、レスポンスヘッダーは権限を制限した一時ディレクトリへ保存する。
+公開HTTPSプロキシを用意し、LINE Developers ConsoleのWebhook URLを`PUBLIC_ORIGIN/api/v1/webhooks/line`へ設定する。Webhookと再配信を有効化し、署名付きの空イベント検証が200になることを確認する。LINE公式アカウントを友だち追加すると、24時間・1回限りの`/register#token=...`が届く。既に友だちなら「登録」と送信する。
 
-```sh
-check_dir=$(mktemp -d)
-chmod 700 "$check_dir"
-# 入力値はこのPCで設定した管理者パスワード
-printf 'Admin password: '
-read -r -s admin_password
-printf '\n'
-# パスワード内のJSON特殊文字をエスケープする
-escaped_password=$(printf '%s' "$admin_password" | sed 's/\\/\\\\/g; s/"/\\"/g')
-printf '{"admin_id":"owner","password":"%s"}' "$escaped_password" | \
-  curl --fail-with-body -sS -D "$check_dir/headers" \
-    -H 'Origin: https://localhost' -H 'Content-Type: application/json' \
-    --data-binary @- http://127.0.0.1:8080/api/v1/auth/login
-unset admin_password escaped_password
+専用URLでログインID（1〜100文字、大小文字・前後空白を区別）とパスワード（UTF-8で8〜72バイト）を登録する。初期一覧は0件、本人の通知率は`[10,15,20,25,30]`。URLを他人へ共有しない。期限切れ・URL未着時は「登録」を再送する。登録済みならログインURLが届く。
 
-# HTTPでの確認用に、返された2種類のCookieを明示する
-cookies=$(awk 'tolower($1) == "set-cookie:" {sub(/;.*/, "", $2); printf "%s%s", sep, $2; sep="; "}' "$check_dir/headers")
-curl --fail-with-body -sS -H "Cookie: $cookies" \
-  http://127.0.0.1:8080/api/v1/settings/notifications
-unset cookies
-rm -r "$check_dir"
-unset check_dir
-```
+ログインAPIの本文は`{"login_id":"owner","password":"example-password"}`。認証・登録成功時のSessionは`login_id`・`expires_at`・`csrf_token`を返す。CookieはSecure・HttpOnly・SameSite=Strict固定なのでブラウザ利用にはHTTPSが必要。保護された変更APIにはOriginとX-CSRF-Token、公開ログイン・登録・登録確認にはOriginとJSON形式が必要。Webhookには未加工本文のLINE署名を要求する。
 
-どちらもHTTP 200とJSONが返ることを確認する。`PUBLIC_ORIGIN`はAPIのOrigin検証用設定であり、この設定だけでHTTPSサーバーが起動するわけではない。CookieはSecure固定なので、ブラウザから利用する場合はHTTPSリバースプロキシを別途用意する。更新系APIにはOriginに加えてCSRFトークンが必要。
+登録時にはユーザー・初期通知設定・24時間セッションの作成とトークン消費を同一トランザクションで確定する。現在のブラウザだけ旧セッションを置換し、他ブラウザを維持する。ID重複は409でトークン未消費、使えないURLは410。登録の成否不明時は自動再送せず、セッション確認または設定したID・パスワードでログインする。
 
 ### 6. テスト
 

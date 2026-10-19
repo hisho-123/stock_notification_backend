@@ -31,6 +31,12 @@ func writeError(w http.ResponseWriter, err error) {
 		status, code, message = 401, "INVALID_CREDENTIALS", "IDまたはパスワードが違います。"
 	case errors.Is(err, usecase.ErrUnauthenticated):
 		status, code, message = 401, "UNAUTHENTICATED", "ログインしてください。"
+	case errors.Is(err, usecase.ErrRegistrationUnavailable):
+		status, code, message = 410, "REGISTRATION_LINK_UNAVAILABLE", "登録URLを利用できません。LINEで『登録』と送信してください。"
+	case errors.Is(err, usecase.ErrLoginIDExists):
+		status, code, message = 409, "LOGIN_ID_ALREADY_EXISTS", "このログインIDは使用済みです。"
+	case errors.Is(err, usecase.ErrInvalidLINESignature):
+		status, code, message = 403, "INVALID_LINE_SIGNATURE", "LINEの署名を確認できませんでした。"
 	case errors.Is(err, usecase.ErrCSRF):
 		status, code, message = 403, "CSRF_FAILED", "要求元または認証トークンを確認できませんでした。"
 	case errors.Is(err, usecase.ErrNotFound):

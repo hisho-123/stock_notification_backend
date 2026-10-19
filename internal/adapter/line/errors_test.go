@@ -21,7 +21,7 @@ func (brokenReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
 func TestClientConfigurationAndFailures(t *testing.T) {
 	for _, timeout := range []time.Duration{0, time.Second, 30 * time.Second, 31 * time.Second} {
 		original := &http.Client{Timeout: timeout}
-		c := New("token", "user", original)
+		c := New("token", original)
 		want := timeout
 		if timeout <= 0 || timeout > 30*time.Second {
 			want = 30 * time.Second
@@ -30,13 +30,13 @@ func TestClientConfigurationAndFailures(t *testing.T) {
 			t.Fatal(c.HTTP, original)
 		}
 	}
-	if c := New("token", "user", nil); c.HTTP.Timeout != 30*time.Second || c.Endpoint != "https://api.line.me/v2/bot/message/push" {
+	if c := New("token", nil); c.HTTP.Timeout != 30*time.Second || c.Endpoint != "https://api.line.me/v2/bot/message/push" {
 		t.Fatal(c)
 	}
 	for _, name := range []string{"invalid URL", "network", "body read"} {
 		t.Run(name, func(t *testing.T) {
 			calls := 0
-			c := New("secret", "user", &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			c := New("secret", &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 				calls++
 				if name == "network" {
 					return nil, errors.New("secret")
@@ -46,7 +46,7 @@ func TestClientConfigurationAndFailures(t *testing.T) {
 			if name == "invalid URL" {
 				c.Endpoint = "%zz"
 			}
-			err := c.Send(context.Background(), "通知")
+			err := c.Send(context.Background(), "user", "通知")
 			wantCalls := 1
 			if name == "invalid URL" {
 				wantCalls = 0
@@ -64,9 +64,9 @@ func TestRedirectIsNotFollowed(t *testing.T) {
 	defer target.Close()
 	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, target.URL, 302) }))
 	defer redirect.Close()
-	c := New("token", "user", redirect.Client())
+	c := New("token", redirect.Client())
 	c.Endpoint = redirect.URL
-	if err := c.Send(context.Background(), "通知"); !errors.Is(err, ErrNotification) || targetCalls != 0 {
+	if err := c.Send(context.Background(), "user", "通知"); !errors.Is(err, ErrNotification) || targetCalls != 0 {
 		t.Fatal(err, targetCalls)
 	}
 }

@@ -13,6 +13,9 @@ type store interface {
 	usecase.SettingsRepository
 	usecase.SessionRepository
 	usecase.Transaction
+	usecase.UserRepository
+	usecase.RegistrationRepository
+	usecase.SnapshotRepository
 	Close()
 }
 

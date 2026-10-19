@@ -68,6 +68,12 @@ func database(t *testing.T) (*postgres.Store, *pgx.Conn, string) {
 	if _, err := admin.Exec(context.Background(), string(data)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := admin.Exec(context.Background(), `INSERT INTO users(login_id,password_hash,line_user_id,line_following,created_at,updated_at) VALUES('owner',$1,'U00000000000000000000000000000001',true,now(),now());`, testfixture.PasswordHash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := admin.Exec(context.Background(), `INSERT INTO notification_settings(login_id,thresholds,updated_at) VALUES('owner',ARRAY[10,15,20,25,30]::smallint[],now())`); err != nil {
+		t.Fatal(err)
+	}
 	q := u.Query()
 	q.Set("search_path", schema)
 	u.RawQuery = q.Encode()
@@ -95,7 +101,7 @@ func asset(t *testing.T, code, value string) domain.Asset {
 
 func TestRepositoriesAndDatabaseConstraints(t *testing.T) {
 	s, raw, _ := database(t)
-	ctx := context.Background()
+	ctx := ownerContext()
 	first, err := s.Create(ctx, asset(t, "A_%", "9"))
 	if err != nil {
 		t.Fatal(err)
@@ -193,7 +199,7 @@ func TestRepositoriesAndDatabaseConstraints(t *testing.T) {
 
 func TestDeclineSortingWithoutDivisionRounding(t *testing.T) {
 	s, _, _ := database(t)
-	ctx := context.Background()
+	ctx := ownerContext()
 	high := "1" + strings.Repeat("0", 40)
 	a, err := s.Create(ctx, asset(t, "SLIGHTLY_LESS", high))
 	if err != nil {
@@ -258,7 +264,7 @@ func mockServices(t *testing.T) *externalServices {
 	e.prices = fmp.New("secret-fmp-key", quoteServer.Client())
 	e.prices.Endpoint = quoteServer.URL
 	e.prices.Now = func() time.Time { return e.now }
-	e.line = line.New("secret-line-token", "test-user", lineServer.Client())
+	e.line = line.New("secret-line-token", lineServer.Client())
 	e.line.Endpoint = lineServer.URL
 	return e
 }
@@ -267,10 +273,9 @@ func TestAPIAndMonitoring(t *testing.T) {
 	s, raw, _ := database(t)
 	external := mockServices(t)
 	clock := fixedClock{external.now}
-	hash := testfixture.PasswordHash
 	api := &httpapi.Server{PublicOrigin: "https://stock.example.com", Clock: clock,
 		Assets: usecase.Assets{Repository: s, Prices: external.prices, Clock: clock}, Settings: usecase.Settings{Repository: s, Clock: clock},
-		Auth: usecase.Auth{Repository: s, Passwords: security.Passwords{}, Tokens: security.Tokens{}, Clock: clock, AdminID: "owner", PasswordHash: hash},
+		Auth: usecase.Auth{Repository: s, Passwords: security.Passwords{}, Tokens: security.Tokens{}, Clock: clock, Users: s},
 	}
 	handler := api.Handler()
 	var cookies []*http.Cookie
@@ -290,7 +295,7 @@ func TestAPIAndMonitoring(t *testing.T) {
 	if w := call("GET", "/api/v1/assets", ""); w.Code != 401 {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	w := call("POST", "/api/v1/auth/login", `{"admin_id":"owner","password":"correct"}`)
+	w := call("POST", "/api/v1/auth/login", `{"login_id":"owner","password":"correct-password"}`)
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
@@ -337,7 +342,7 @@ func TestAPIAndMonitoring(t *testing.T) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	external.stale, external.price = false, "73"
-	monitor := usecase.Monitor{Assets: s, Settings: s, Sessions: s, Transaction: s, Prices: external.prices, Notifier: external.line, Clock: clock}
+	monitor := usecase.Monitor{Assets: s, Snapshots: s, Users: s, Registrations: s, Settings: s, Sessions: s, Transaction: s, Prices: external.prices, Notifier: external.line, Clock: clock}
 	result, err := monitor.Run(context.Background(), nil)
 	if err != nil || !result.Success() || result.Processed != 1 || external.lineCalls != 1 {
 		t.Fatal(result, err, external.lineCalls)
@@ -349,13 +354,13 @@ func TestAPIAndMonitoring(t *testing.T) {
 	// Stale notification failure keeps monitoring; next success stops it.
 	external.stale, external.lineStatus = true, 500
 	result, err = monitor.Run(context.Background(), nil)
-	a, fetchErr := s.Get(context.Background(), 1)
+	a, fetchErr := s.Get(ownerContext(), 1)
 	if err != nil || fetchErr != nil || result.Failed != 1 || !a.MonitoringEnabled || a.LatestValue.String() != "73" || *a.LastErrorCode != domain.NotificationFailed {
 		t.Fatal(result, a, err, fetchErr)
 	}
 	external.lineStatus = 200
 	result, err = monitor.Run(context.Background(), nil)
-	a, fetchErr = s.Get(context.Background(), 1)
+	a, fetchErr = s.Get(ownerContext(), 1)
 	if err != nil || fetchErr != nil || result.Success() || result.Stale != 1 || a.MonitoringEnabled || *a.LastErrorCode != domain.PriceDataStale {
 		t.Fatal(result, a, err)
 	}
@@ -397,14 +402,14 @@ func TestMonitorConnectionLossAndMigrationRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	a, err := s.Create(context.Background(), asset(t, "AAPL", "100"))
+	a, err := s.Create(ownerContext(), asset(t, "AAPL", "100"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var pid int
 	// A transactional repository runs on the same pinned connection.
 	if err := s.WithinTransaction(context.Background(), func(repo usecase.AssetRepository) error {
-		_, err := repo.Get(context.Background(), a.ID)
+		_, err := repo.Get(ownerContext(), a.ID)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -415,10 +420,10 @@ func TestMonitorConnectionLossAndMigrationRollback(t *testing.T) {
 	if _, err := raw.Exec(context.Background(), `SELECT pg_terminate_backend($1)`, pid); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Get(context.Background(), a.ID); !errors.Is(err, usecase.ErrConnectionLost) {
+	if _, err := s.Get(ownerContext(), a.ID); !errors.Is(err, usecase.ErrConnectionLost) {
 		t.Fatal("connection loss not reported", err)
 	}
-	if _, err := s.Get(context.Background(), a.ID); !errors.Is(err, usecase.ErrConnectionLost) {
+	if _, err := s.Get(ownerContext(), a.ID); !errors.Is(err, usecase.ErrConnectionLost) {
 		t.Fatal("connection silently reopened", err)
 	}
 	down, err := os.ReadFile(filepath.Join("..", "..", "migrations", "000001_initial.down.sql"))
@@ -436,3 +441,5 @@ func TestMonitorConnectionLossAndMigrationRollback(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func ownerContext() context.Context { return usecase.WithLoginID(context.Background(), "owner") }

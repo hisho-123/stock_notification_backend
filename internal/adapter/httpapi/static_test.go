@@ -23,7 +23,7 @@ func TestStaticFilesAndSPARoutes(t *testing.T) {
 		status int
 		body   string
 	}{
-		{"/", 200, "<html>app</html>"}, {"/login", 200, "<html>app</html>"}, {"/assets", 200, "<html>app</html>"}, {"/settings", 200, "<html>app</html>"}, {"/settings/notifications", 200, "<html>app</html>"},
+		{"/", 200, "<html>app</html>"}, {"/login", 200, "<html>app</html>"}, {"/register", 200, "<html>app</html>"}, {"/assets", 200, "<html>app</html>"}, {"/settings", 200, "<html>app</html>"}, {"/settings/notifications", 200, "<html>app</html>"},
 		{"/assets/app.js", 200, "console.log('app')"}, {"/missing.js", 404, ""}, {"/.env", 404, ""},
 	} {
 		w := httptest.NewRecorder()
